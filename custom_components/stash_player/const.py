@@ -32,7 +32,7 @@ ACTIVE_SCENE_QUERY = """
 query ActiveScene {
   findScenes(
     scene_filter: { interactive: false }
-    filter: { per_page: 1, sort: "updated_at", direction: DESC }
+    filter: { per_page: 2, sort: "updated_at", direction: DESC }
   ) {
     scenes {
       id

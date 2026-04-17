@@ -54,11 +54,10 @@ class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Failed to update from Stash: {err}") from err
 
         scenes = scene_data.get("findScenes", {}).get("scenes", [])
-        scene = scenes[0] if scenes else None
         streams = playing_data.get("sceneStreams") or []
 
         return {
-            "scene": scene,
+            "scenes": scenes,
             "is_streaming": bool(streams),
             "streams": streams,
         }

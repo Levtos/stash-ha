@@ -24,7 +24,7 @@ class StashInvalidURLError(Exception):
 def normalize_stash_url(raw_url: str) -> str:
     """Normalize user-entered Stash URL.
 
-    Accepts host-only values like `192.168.178.113` and automatically prefixes
+    Accepts host-only values like `192.168.1.100` and automatically prefixes
     `http://` when no scheme is provided.
     """
     url = (raw_url or "").strip()
