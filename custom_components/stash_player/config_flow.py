@@ -81,10 +81,7 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(
-                    CONF_STASH_URL,
-                    default="http://192.168.178.113:9999",
-                ): selector.TextSelector(),
+                vol.Required(CONF_STASH_URL): selector.TextSelector(),
                 vol.Required(CONF_API_KEY): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 ),
