@@ -10,6 +10,7 @@ from homeassistant.components.media_player.const import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_IDLE, STATE_PAUSED, STATE_PLAYING
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
@@ -54,8 +55,14 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._position_updated_at: datetime | None = None
         self._manual_state: str | None = None
 
-        self._attr_unique_id = f"{entry.entry_id}_player"
-        self._attr_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
+        player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
+        self._attr_unique_id = f"{entry.entry_id}_player_{index + 1}"
+        self._attr_name = f"{player_name} {index + 1}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name=player_name,
+            manufacturer="Stash",
+        )
 
     @property
     def _scene(self) -> dict[str, Any]:
@@ -63,14 +70,11 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def state(self) -> str | None:
-        """Return playback state."""
         scene = self._scene
         if not scene:
             return STATE_IDLE
-
         if self._manual_state in (STATE_PAUSED, STATE_IDLE):
             return self._manual_state
-
         resume_time = float(scene.get("resume_time", 0) or 0)
         is_streaming = bool((self.coordinator.data or {}).get("is_streaming"))
         if resume_time > 0 and is_streaming:
@@ -113,20 +117,17 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         scene = self._scene
         if not scene:
             return {}
-
         tags = scene.get("tags", [])
         files = scene.get("files", [])
         studio = scene.get("studio")
         scene_id = scene.get("id")
         rating100 = scene.get("rating100")
-
         resolution = None
         if files:
             width = files[0].get("width")
             height = files[0].get("height")
             if width and height:
                 resolution = f"{width}x{height}"
-
         return {
             "stash_scene_id": scene_id,
             "stash_url": f"{self._client.stash_url}/scenes/{scene_id}" if scene_id else None,
@@ -138,7 +139,6 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         }
 
     async def async_media_play(self) -> None:
-        """Best-effort play action (limited by Stash API)."""
         scene_id = self._scene.get("id")
         if scene_id:
             await self._client.query(GENERATE_SCREENSHOT_MUTATION, {"id": scene_id})
@@ -146,12 +146,10 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         self.async_write_ha_state()
 
     async def async_media_pause(self) -> None:
-        """Local-only pause state due to API limitations."""
         self._manual_state = STATE_PAUSED
         self.async_write_ha_state()
 
     async def async_media_stop(self) -> None:
-        """Set local state to idle and reset resume position in local cache."""
         self._manual_state = STATE_IDLE
         scene = self._scene
         if scene:
@@ -162,11 +160,9 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         """No-op: Stash does not expose volume controls over GraphQL."""
 
     async def async_media_seek(self, position: float) -> None:
-        """Persist resume time to Stash."""
         scene_id = self._scene.get("id")
         if not scene_id:
             return
-
         await self._client.query(SAVE_ACTIVITY_MUTATION, {"id": scene_id, "pos": float(position)})
         self._scene["resume_time"] = float(position)
         self._manual_state = None
@@ -174,7 +170,6 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         self.async_write_ha_state()
 
     def _handle_coordinator_update(self) -> None:
-        """Handle coordinator updates."""
         self._manual_state = None
         self._position_updated_at = dt_util.utcnow()
         super()._handle_coordinator_update()

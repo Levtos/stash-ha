@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "stash_player"
-PLATFORMS = ["media_player", "camera", "sensor"]
+PLATFORMS = ["media_player", "camera", "sensor", "button", "binary_sensor"]
 
 CONF_STASH_URL = "stash_url"
 CONF_API_KEY = "api_key"
@@ -27,8 +27,11 @@ NSFW_FULL = "full"
 NSFW_MODES = [NSFW_BLUR, NSFW_HIDDEN, NSFW_FULL]
 
 COORDINATOR_KEY = "coordinator"
+LIBRARY_COORDINATOR_KEY = "library_coordinator"
 CLIENT_KEY = "client"
 WEBHOOK_VIEW_KEY = "webhook_view"
+
+DEFAULT_LIBRARY_POLL_INTERVAL = 300
 
 ACTIVE_SCENE_QUERY = """
 query ActiveScene {
