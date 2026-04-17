@@ -23,37 +23,30 @@ from .const import (
     NSFW_HIDDEN,
 )
 
-NUM_CAMERAS = 2
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up camera entities from config entry."""
+    """Set up camera entity from config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        StashCoverCamera(entry, data[COORDINATOR_KEY], index)
-        for index in range(NUM_CAMERAS)
-    ])
+    async_add_entities([StashCoverCamera(entry, data[COORDINATOR_KEY])])
 
 
 class StashCoverCamera(CoordinatorEntity, Camera):
     """Proxy camera for Stash screenshot with content filtering."""
 
-    def __init__(self, entry: ConfigEntry, coordinator, index: int) -> None:
+    def __init__(self, entry: ConfigEntry, coordinator) -> None:
         super().__init__(coordinator)
         self._entry = entry
-        self._index = index
-        self._attr_unique_id = f"{entry.entry_id}_cover_{index + 1}"
+        self._attr_unique_id = f"{entry.entry_id}_cover"
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
-        self._attr_name = f"{player_name} Cover {index + 1}"
+        self._attr_name = f"{player_name} Cover"
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return current camera image."""
-        scenes = (self.coordinator.data or {}).get("scenes", [])
-        scene = scenes[self._index] if self._index < len(scenes) else {}
+        scene = (self.coordinator.data or {}).get("scene") or {}
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
         if not screenshot_url:
             return self._placeholder_image()

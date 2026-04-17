@@ -10,7 +10,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -18,10 +18,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     ACTIVE_SCENE_QUERY,
     CLIENT_KEY,
+    CONF_DEBUG_LOGGING,
     CONF_POLL_INTERVAL,
     CONF_STASH_URL,
     CONF_USE_WEBHOOK,
     COORDINATOR_KEY,
+    DEFAULT_DEBUG_LOGGING,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
     PLAYING_STATE_QUERY,
@@ -31,6 +33,7 @@ from .const import (
 from .graphql import StashConnectionError, StashGraphQLClient, StashGraphQLError
 
 _LOGGER = logging.getLogger(__name__)
+SERVICE_DEBUG_CONNECTION = "debug_connection"
 
 
 class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -51,13 +54,15 @@ class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             scene_data = await self.client.query(ACTIVE_SCENE_QUERY)
             playing_data = await self.client.query(PLAYING_STATE_QUERY)
         except (StashConnectionError, StashGraphQLError) as err:
+            _LOGGER.error("Coordinator update failed: %s", err)
             raise UpdateFailed(f"Failed to update from Stash: {err}") from err
 
         scenes = scene_data.get("findScenes", {}).get("scenes", [])
+        scene = scenes[0] if scenes else None
         streams = playing_data.get("sceneStreams") or []
 
         return {
-            "scenes": scenes,
+            "scene": scene,
             "is_streaming": bool(streams),
             "streams": streams,
         }
@@ -75,7 +80,9 @@ class StashWebhookView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         """Handle webhook POST events from Stash."""
-        _payload = await request.json(content_type=None)
+        payload = await request.json(content_type=None)
+        _LOGGER.debug("Received Stash webhook payload: %s", payload)
+
         entry_id = self.url.rsplit("/", 1)[-1]
         entry_data = self.hass.data.get(DOMAIN, {}).get(entry_id, {})
         coordinator: StashCoordinator | None = entry_data.get(COORDINATOR_KEY)
@@ -86,19 +93,50 @@ class StashWebhookView(HomeAssistantView):
         return self.json({"ok": True})
 
 
+async def _async_handle_debug_connection(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Manual service for debugging connectivity issues."""
+    entry_id: str | None = call.data.get("entry_id")
+    entries = hass.data.get(DOMAIN, {})
+
+    if entry_id:
+        targets = [(entry_id, entries.get(entry_id))]
+    else:
+        targets = list(entries.items())
+
+    if not targets:
+        _LOGGER.warning("No stash_player entries available for debug_connection")
+        return
+
+    for target_entry_id, data in targets:
+        if not data:
+            _LOGGER.warning("Entry %s not found for debug_connection", target_entry_id)
+            continue
+
+        client: StashGraphQLClient = data[CLIENT_KEY]
+        _LOGGER.info("Running stash_player debug_connection for entry=%s url=%s", target_entry_id, client.stash_url)
+        try:
+            await client.validate_connection()
+            _LOGGER.info("stash_player debug_connection successful for entry=%s", target_entry_id)
+        except Exception as err:
+            _LOGGER.error("stash_player debug_connection failed for entry=%s: %s", target_entry_id, err)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Stash Player from a config entry."""
     session = aiohttp_client.async_get_clientsession(hass)
     stash_url: str = entry.data[CONF_STASH_URL]
     api_key: str = entry.data[CONF_API_KEY]
 
-    client = StashGraphQLClient(session, stash_url, api_key)
+    debug_logging = bool(entry.options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
+    client = StashGraphQLClient(session, stash_url, api_key, debug_logging=debug_logging)
+
     poll_interval = int(entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
     coordinator = StashCoordinator(hass, client, poll_interval)
 
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception as err:
+        _LOGGER.error("Initial Stash refresh failed for %s: %s", stash_url, err)
         raise ConfigEntryNotReady(str(err)) from err
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
@@ -106,12 +144,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CLIENT_KEY: client,
     }
 
+    if not hass.services.has_service(DOMAIN, SERVICE_DEBUG_CONNECTION):
+        async def _debug_service(call: ServiceCall) -> None:
+            await _async_handle_debug_connection(hass, call)
+
+        hass.services.async_register(DOMAIN, SERVICE_DEBUG_CONNECTION, _debug_service)
+
     if entry.options.get(CONF_USE_WEBHOOK, False):
         view = StashWebhookView(hass, entry.entry_id)
         hass.http.register_view(view)
         hass.data[DOMAIN][entry.entry_id][WEBHOOK_VIEW_KEY] = view
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _LOGGER.info("stash_player setup complete for %s", stash_url)
     return True
 
 
@@ -120,4 +165,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
+        if not hass.data.get(DOMAIN) and hass.services.has_service(DOMAIN, SERVICE_DEBUG_CONNECTION):
+            hass.services.async_remove(DOMAIN, SERVICE_DEBUG_CONNECTION)
     return unload_ok

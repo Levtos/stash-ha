@@ -12,12 +12,14 @@ CONF_POLL_INTERVAL = "poll_interval"
 CONF_USE_WEBHOOK = "use_webhook"
 CONF_WEBHOOK_PORT = "webhook_port"
 CONF_NSFW_MODE = "nsfw_mode"
+CONF_DEBUG_LOGGING = "debug_logging"
 
 DEFAULT_PLAYER_NAME = "Stash"
 DEFAULT_POLL_INTERVAL = 5
 DEFAULT_USE_WEBHOOK = False
 DEFAULT_WEBHOOK_PORT = 8765
 DEFAULT_NSFW_MODE = "blur"
+DEFAULT_DEBUG_LOGGING = False
 
 NSFW_BLUR = "blur"
 NSFW_HIDDEN = "hidden"
@@ -32,7 +34,7 @@ ACTIVE_SCENE_QUERY = """
 query ActiveScene {
   findScenes(
     scene_filter: { interactive: false }
-    filter: { per_page: 2, sort: "updated_at", direction: DESC }
+    filter: { per_page: 1, sort: "updated_at", direction: DESC }
   ) {
     scenes {
       id

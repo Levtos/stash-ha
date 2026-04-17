@@ -14,12 +14,14 @@ from homeassistant.helpers import aiohttp_client, selector
 
 from .const import (
     CONF_NSFW_MODE,
+    CONF_DEBUG_LOGGING,
     CONF_PLAYER_NAME,
     CONF_POLL_INTERVAL,
     CONF_STASH_URL,
     CONF_USE_WEBHOOK,
     CONF_WEBHOOK_PORT,
     DEFAULT_NSFW_MODE,
+    DEFAULT_DEBUG_LOGGING,
     DEFAULT_PLAYER_NAME,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_USE_WEBHOOK,
@@ -70,6 +72,8 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "cannot_connect"
                 except ConfigEntryAuthFailed:
                     errors["base"] = "invalid_auth"
+                except Exception:
+                    errors["base"] = "cannot_connect"
                 else:
                     await self.async_set_unique_id(normalized_url.lower())
                     self._abort_if_unique_id_configured()
@@ -81,7 +85,10 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_STASH_URL): selector.TextSelector(),
+                vol.Required(
+                    CONF_STASH_URL,
+                    default="http://192.168.178.113:9999",
+                ): selector.TextSelector(),
                 vol.Required(CONF_API_KEY): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 ),
@@ -104,6 +111,7 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     selector.NumberSelectorConfig(min=2, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
                 ),
                 vol.Optional(CONF_USE_WEBHOOK, default=DEFAULT_USE_WEBHOOK): selector.BooleanSelector(),
+                vol.Optional(CONF_DEBUG_LOGGING, default=DEFAULT_DEBUG_LOGGING): selector.BooleanSelector(),
                 vol.Optional(CONF_NSFW_MODE, default=DEFAULT_NSFW_MODE): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=NSFW_MODES,
@@ -173,6 +181,10 @@ class StashPlayerOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_USE_WEBHOOK,
                     default=options.get(CONF_USE_WEBHOOK, DEFAULT_USE_WEBHOOK),
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    CONF_DEBUG_LOGGING,
+                    default=options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING),
                 ): selector.BooleanSelector(),
                 vol.Optional(
                     CONF_NSFW_MODE,
