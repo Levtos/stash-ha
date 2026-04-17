@@ -6,6 +6,7 @@ from typing import Any
 
 import aiohttp
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from yarl import URL
 
 
 class StashConnectionError(Exception):
@@ -33,7 +34,7 @@ def normalize_stash_url(raw_url: str) -> str:
     if "://" not in url:
         url = f"http://{url}"
 
-    parsed = aiohttp.client_reqrep.URL(url)
+    parsed = URL(url)
     if parsed.scheme not in ("http", "https") or not parsed.host:
         raise StashInvalidURLError("URL must include a valid host and http/https scheme")
 
