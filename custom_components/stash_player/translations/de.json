@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mit Stash verbinden",
+        "description": "Stash URL und API-Schlüssel eingeben. Beispiele: https://stash.example.com, http://192.168.178.113:9999 oder 192.168.178.113 (wird automatisch zu http:// ergänzt).",
+        "data": {
+          "stash_url": "Stash Server URL",
+          "api_key": "API-Schlüssel"
+        }
+      },
+      "options": {
+        "title": "Stash Player Optionen",
+        "description": "Polling und Inhaltsmodus konfigurieren.",
+        "data": {
+          "player_name": "Player-Name",
+          "poll_interval": "Abfrageintervall (Sekunden)",
+          "use_webhook": "Stash-Webhooks verwenden",
+          "nsfw_mode": "Inhalts-Modus"
+        }
+      },
+      "webhook": {
+        "title": "Webhook-Optionen",
+        "description": "Stash sendet Ereignisse direkt an HA. Reaktionsschneller als Polling, benötigt aber Netzwerkzugriff von Stash auf HA.",
+        "data": {
+          "webhook_port": "Webhook-Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen",
+      "invalid_auth": "Ungültige Authentifizierung",
+      "invalid_url": "Ungültige URL"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Stash Player Optionen",
+        "data": {
+          "player_name": "Player-Name",
+          "poll_interval": "Abfrageintervall (Sekunden)",
+          "use_webhook": "Stash-Webhooks verwenden",
+          "nsfw_mode": "Inhalts-Modus"
+        }
+      },
+      "webhook": {
+        "title": "Webhook-Optionen",
+        "description": "Stash sendet Ereignisse direkt an HA. Reaktionsschneller als Polling, benötigt aber Netzwerkzugriff von Stash auf HA.",
+        "data": {
+          "webhook_port": "Webhook-Port"
+        }
+      }
+    }
+  },
+  "selector": {
+    "nsfw_mode": {
+      "options": {
+        "blur": "Unscharf",
+        "hidden": "Versteckt (Platzhalter)",
+        "full": "Volle Qualität"
+      }
+    }
+  }
+}
