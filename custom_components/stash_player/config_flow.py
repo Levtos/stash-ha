@@ -25,7 +25,9 @@ from .const import (
     DEFAULT_USE_WEBHOOK,
     DEFAULT_WEBHOOK_PORT,
     DOMAIN,
-    NSFW_MODES,
+    NSFW_BLUR,
+    NSFW_FULL,
+    NSFW_HIDDEN,
 )
 from .graphql import (
     StashConnectionError,
@@ -33,6 +35,12 @@ from .graphql import (
     StashInvalidURLError,
     normalize_stash_url,
 )
+
+_NSFW_OPTIONS = [
+    {"value": NSFW_BLUR, "label": "Blurred"},
+    {"value": NSFW_HIDDEN, "label": "Hidden"},
+    {"value": NSFW_FULL, "label": "Full quality"},
+]
 
 
 class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -45,23 +53,20 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._options_data: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Step 1: validate connection against Stash GraphQL endpoint."""
+        """Step 1: validate URL and API key against Stash."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             stash_url = user_input[CONF_STASH_URL]
-            api_key = user_input[CONF_API_KEY]
+            api_key = user_input.get(CONF_API_KEY, "")
             session = aiohttp_client.async_get_clientsession(self.hass)
 
             try:
                 normalized_url = normalize_stash_url(stash_url)
             except StashInvalidURLError:
                 errors["base"] = "invalid_url"
-                normalized_url = stash_url
-
-            client = StashGraphQLClient(session, normalized_url, api_key) if not errors else None
-
-            if client is not None:
+            else:
+                client = StashGraphQLClient(session, normalized_url, api_key)
                 try:
                     await client.validate_connection()
                 except StashInvalidURLError:
@@ -82,7 +87,7 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_STASH_URL): selector.TextSelector(),
-                vol.Required(CONF_API_KEY): selector.TextSelector(
+                vol.Optional(CONF_API_KEY, default=""): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 ),
             }
@@ -106,9 +111,8 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_USE_WEBHOOK, default=DEFAULT_USE_WEBHOOK): selector.BooleanSelector(),
                 vol.Optional(CONF_NSFW_MODE, default=DEFAULT_NSFW_MODE): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=NSFW_MODES,
+                        options=_NSFW_OPTIONS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
-                        translation_key=CONF_NSFW_MODE,
                     )
                 ),
             }
@@ -116,7 +120,7 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="options", data_schema=schema)
 
     async def async_step_webhook(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Optional webhook-specific settings."""
+        """Step 3 (optional): webhook-specific settings."""
         if user_input is not None:
             self._options_data.update(user_input)
             return self._create_entry()
@@ -179,9 +183,8 @@ class StashPlayerOptionsFlow(config_entries.OptionsFlow):
                     default=options.get(CONF_NSFW_MODE, DEFAULT_NSFW_MODE),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=NSFW_MODES,
+                        options=_NSFW_OPTIONS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
-                        translation_key=CONF_NSFW_MODE,
                     )
                 ),
             }

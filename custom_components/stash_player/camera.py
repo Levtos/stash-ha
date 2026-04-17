@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -40,18 +41,23 @@ async def async_setup_entry(
 
 
 class StashCoverCamera(CoordinatorEntity, Camera):
-    """Proxy camera for Stash screenshot with content filtering."""
+    """Proxy camera for Stash screenshot with optional content filtering."""
 
     def __init__(self, entry: ConfigEntry, coordinator, index: int) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._index = index
-        self._attr_unique_id = f"{entry.entry_id}_cover_{index + 1}"
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
+        self._attr_unique_id = f"{entry.entry_id}_cover_{index + 1}"
         self._attr_name = f"{player_name} Cover {index + 1}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name=player_name,
+            manufacturer="Stash",
+        )
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
-        """Return current camera image."""
+        """Return current scene screenshot."""
         scenes = (self.coordinator.data or {}).get("scenes", [])
         scene = scenes[self._index] if self._index < len(scenes) else {}
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
@@ -63,11 +69,10 @@ class StashCoverCamera(CoordinatorEntity, Camera):
             return self._placeholder_image()
 
         session = aiohttp_client.async_get_clientsession(self.hass)
+        api_key = self._entry.data.get(CONF_API_KEY, "")
+        headers = {"ApiKey": api_key} if api_key else {}
         try:
-            async with session.get(
-                screenshot_url,
-                headers={"ApiKey": self._entry.data[CONF_API_KEY]},
-            ) as response:
+            async with session.get(screenshot_url, headers=headers) as response:
                 response.raise_for_status()
                 image_data = await response.read()
         except Exception:
@@ -78,7 +83,6 @@ class StashCoverCamera(CoordinatorEntity, Camera):
         return image_data
 
     async def _blur_image(self, data: bytes) -> bytes:
-        """Blur image content if Pillow is available."""
         try:
             from PIL import Image, ImageFilter
 
@@ -91,7 +95,6 @@ class StashCoverCamera(CoordinatorEntity, Camera):
             return data
 
     def _placeholder_image(self) -> bytes:
-        """Return a 1x1 transparent PNG as placeholder."""
         return (
             b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
             b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0bIDATx\x9cc\x00\x01"

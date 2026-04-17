@@ -22,10 +22,12 @@ from .const import (
     CONF_STASH_URL,
     CONF_USE_WEBHOOK,
     COORDINATOR_KEY,
+    DEFAULT_LIBRARY_POLL_INTERVAL,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
-    PLAYING_STATE_QUERY,
+    LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
+    PLAYING_STATE_QUERY,
     WEBHOOK_VIEW_KEY,
 )
 from .graphql import StashConnectionError, StashGraphQLClient, StashGraphQLError
@@ -34,7 +36,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator for polling scene state from Stash."""
+    """Polls active scene state every few seconds."""
 
     def __init__(self, hass: HomeAssistant, client: StashGraphQLClient, poll_interval: int) -> None:
         super().__init__(
@@ -46,7 +48,6 @@ class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch active scene and current stream information."""
         try:
             scene_data = await self.client.query(ACTIVE_SCENE_QUERY)
             playing_data = await self.client.query(PLAYING_STATE_QUERY)
@@ -55,11 +56,49 @@ class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         scenes = scene_data.get("findScenes", {}).get("scenes", [])
         streams = playing_data.get("sceneStreams") or []
-
         return {
             "scenes": scenes,
             "is_streaming": bool(streams),
             "streams": streams,
+        }
+
+
+class StashLibraryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Polls library statistics every 5 minutes."""
+
+    def __init__(self, hass: HomeAssistant, client: StashGraphQLClient) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_library",
+            update_interval=timedelta(seconds=DEFAULT_LIBRARY_POLL_INTERVAL),
+        )
+        self.client = client
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            scenes = await self.client.async_get_scenes_count()
+            movies = await self.client.async_get_movies_count()
+            performers = await self.client.async_get_performers_count()
+            studios = await self.client.async_get_studios_count()
+            tags = await self.client.async_get_tags_count()
+            images = await self.client.async_get_images_count()
+            galleries = await self.client.async_get_galleries_count()
+            markers = await self.client.async_get_markers_count()
+            version = await self.client.async_get_version()
+        except (StashConnectionError, StashGraphQLError) as err:
+            raise UpdateFailed(f"Library stats update failed: {err}") from err
+
+        return {
+            "scenes": scenes,
+            "movies": movies,
+            "performers": performers,
+            "studios": studios,
+            "tags": tags,
+            "images": images,
+            "galleries": galleries,
+            "markers": markers,
+            "version": version,
         }
 
 
@@ -74,15 +113,13 @@ class StashWebhookView(HomeAssistantView):
         self.name = f"api:stash_player:webhook:{entry_id}"
 
     async def post(self, request: web.Request) -> web.Response:
-        """Handle webhook POST events from Stash."""
+        """Handle webhook POST from Stash."""
         _payload = await request.json(content_type=None)
         entry_id = self.url.rsplit("/", 1)[-1]
         entry_data = self.hass.data.get(DOMAIN, {}).get(entry_id, {})
         coordinator: StashCoordinator | None = entry_data.get(COORDINATOR_KEY)
-
         if coordinator:
             self.hass.async_create_task(coordinator.async_request_refresh())
-
         return self.json({"ok": True})
 
 
@@ -90,19 +127,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Stash Player from a config entry."""
     session = aiohttp_client.async_get_clientsession(hass)
     stash_url: str = entry.data[CONF_STASH_URL]
-    api_key: str = entry.data[CONF_API_KEY]
+    api_key: str = entry.data.get(CONF_API_KEY, "")
 
     client = StashGraphQLClient(session, stash_url, api_key)
     poll_interval = int(entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
-    coordinator = StashCoordinator(hass, client, poll_interval)
+
+    playback_coordinator = StashCoordinator(hass, client, poll_interval)
+    library_coordinator = StashLibraryCoordinator(hass, client)
 
     try:
-        await coordinator.async_config_entry_first_refresh()
+        await playback_coordinator.async_config_entry_first_refresh()
+        await library_coordinator.async_config_entry_first_refresh()
     except Exception as err:
         raise ConfigEntryNotReady(str(err)) from err
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        COORDINATOR_KEY: coordinator,
+        COORDINATOR_KEY: playback_coordinator,
+        LIBRARY_COORDINATOR_KEY: library_coordinator,
         CLIENT_KEY: client,
     }
 
