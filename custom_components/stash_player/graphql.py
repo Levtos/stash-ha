@@ -73,34 +73,75 @@ class StashGraphQLClient:
         """Return normalized stash URL."""
         return self._stash_url
 
+    @property
+    def endpoint(self) -> str:
+        """Return the currently active GraphQL endpoint."""
+        return self._endpoint
+
+    def _endpoint_candidates(self) -> list[str]:
+        """Return endpoint candidates for compatibility with different deployments."""
+        candidates = [self._endpoint]
+        if self._endpoint.endswith("/graphql"):
+            candidates.append(f"{self._stash_url}/api/graphql")
+        return list(dict.fromkeys(candidates))
+
+    def _headers(self) -> dict[str, str]:
+        """Return request headers for GraphQL calls."""
+        if self._api_key:
+            return {"ApiKey": self._api_key}
+        return {}
+
     async def query(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         """Execute GraphQL query."""
-        payload: dict[str, Any] = {"query": query}
+        payload: dict[str, Any] = {"query": query.strip()}
         if variables:
             payload["variables"] = variables
 
         if self._debug_logging:
-            _LOGGER.debug("Stash GraphQL request to %s (has_variables=%s)", self._endpoint, bool(variables))
+            _LOGGER.debug("Stash GraphQL request (has_variables=%s)", bool(variables))
 
-        try:
-            async with self._session.post(
-                self._endpoint,
-                json=payload,
-                headers={"ApiKey": self._api_key},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as response:
-                if response.status in (401, 403):
-                    _LOGGER.warning("Stash auth failed for %s (status=%s)", self._endpoint, response.status)
-                    raise ConfigEntryAuthFailed("Invalid API key")
+        last_http_error: str | None = None
 
-                response.raise_for_status()
-                data = await response.json(content_type=None)
-        except aiohttp.InvalidURL as err:
-            _LOGGER.error("Invalid Stash URL: %s", self._stash_url)
-            raise StashInvalidURLError("Invalid Stash URL") from err
-        except aiohttp.ClientError as err:
-            _LOGGER.error("Could not reach Stash at %s: %s", self._endpoint, err)
-            raise StashConnectionError("Unable to reach Stash") from err
+        for endpoint in self._endpoint_candidates():
+            try:
+                async with self._session.post(
+                    endpoint,
+                    json=payload,
+                    headers=self._headers(),
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    raw_body = await response.text()
+
+                    if response.status in (401, 403):
+                        _LOGGER.warning("Stash auth failed for %s (status=%s)", endpoint, response.status)
+                        raise ConfigEntryAuthFailed("Invalid API key")
+
+                    if response.status >= 400:
+                        last_http_error = f"HTTP {response.status}: {raw_body[:200]}"
+                        _LOGGER.error(
+                            "Stash HTTP error %s on %s. Response body: %s",
+                            response.status,
+                            endpoint,
+                            raw_body[:500],
+                        )
+                        continue
+
+                    data = await response.json(content_type=None)
+                    if endpoint != self._endpoint:
+                        _LOGGER.info("stash_player switched GraphQL endpoint from %s to %s", self._endpoint, endpoint)
+                        self._endpoint = endpoint
+                    break
+            except aiohttp.InvalidURL as err:
+                _LOGGER.error("Invalid Stash URL: %s", endpoint)
+                raise StashInvalidURLError("Invalid Stash URL") from err
+            except aiohttp.ClientError as err:
+                _LOGGER.error("Could not reach Stash at %s: %s", endpoint, err)
+                last_http_error = str(err)
+                continue
+        else:
+            if last_http_error:
+                raise StashGraphQLError(last_http_error)
+            raise StashConnectionError("Unable to reach Stash")
 
         if errors := data.get("errors"):
             message = errors[0].get("message", "Unknown GraphQL error")
@@ -112,5 +153,8 @@ class StashGraphQLClient:
         return data.get("data", {})
 
     async def validate_connection(self) -> None:
-        """Validate credentials and connectivity with a lightweight query."""
-        await self.query("query Ping { systemStatus { databaseSchema } }")
+        """Validate credentials and connectivity with compatibility fallback."""
+        try:
+            await self.query("query Health { version { version } }")
+        except StashGraphQLError:
+            await self.query("query Health { __typename }")

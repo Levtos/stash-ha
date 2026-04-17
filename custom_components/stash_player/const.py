@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "stash_player"
-PLATFORMS = ["media_player", "camera"]
+PLATFORMS = ["media_player", "camera", "sensor"]
 
 CONF_STASH_URL = "stash_url"
 CONF_API_KEY = "api_key"
@@ -89,5 +89,27 @@ mutation SaveScene($id: ID!, $pos: Float!) {
 GENERATE_SCREENSHOT_MUTATION = """
 mutation GenerateScreenshot($id: ID!) {
   sceneGenerateScreenshot(id: $id)
+}
+"""
+
+
+STASH_STATS_QUERY = """
+query StashStats {
+  findScenes(filter: { per_page: 1 }) { count }
+  findMovies(filter: { per_page: 1 }) { count }
+  findPerformers(filter: { per_page: 1 }) { count }
+  findStudios(filter: { per_page: 1 }) { count }
+  findTags(filter: { per_page: 1 }) { count }
+  findImages(filter: { per_page: 1 }) { count }
+  findGalleries(filter: { per_page: 1 }) { count }
+  findSceneMarkers(filter: { per_page: 1 }) { count }
+}
+"""
+
+STASH_VERSION_QUERY = """
+query StashVersion {
+  version {
+    version
+  }
 }
 """

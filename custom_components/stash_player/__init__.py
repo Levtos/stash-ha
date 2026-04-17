@@ -28,6 +28,8 @@ from .const import (
     DOMAIN,
     PLAYING_STATE_QUERY,
     PLATFORMS,
+    STASH_STATS_QUERY,
+    STASH_VERSION_QUERY,
     WEBHOOK_VIEW_KEY,
 )
 from .graphql import StashConnectionError, StashGraphQLClient, StashGraphQLError
@@ -57,6 +59,30 @@ class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Coordinator update failed: %s", err)
             raise UpdateFailed(f"Failed to update from Stash: {err}") from err
 
+        stats: dict[str, Any] = {}
+        version: str | None = None
+
+        try:
+            stats_data = await self.client.query(STASH_STATS_QUERY)
+            stats = {
+                "scenes": (stats_data.get("findScenes") or {}).get("count"),
+                "movies": (stats_data.get("findMovies") or {}).get("count"),
+                "performers": (stats_data.get("findPerformers") or {}).get("count"),
+                "studios": (stats_data.get("findStudios") or {}).get("count"),
+                "tags": (stats_data.get("findTags") or {}).get("count"),
+                "images": (stats_data.get("findImages") or {}).get("count"),
+                "galleries": (stats_data.get("findGalleries") or {}).get("count"),
+                "markers": (stats_data.get("findSceneMarkers") or {}).get("count"),
+            }
+        except StashGraphQLError as err:
+            _LOGGER.debug("Stats query unavailable on this Stash instance: %s", err)
+
+        try:
+            version_data = await self.client.query(STASH_VERSION_QUERY)
+            version = (version_data.get("version") or {}).get("version")
+        except StashGraphQLError as err:
+            _LOGGER.debug("Version query unavailable on this Stash instance: %s", err)
+
         scenes = scene_data.get("findScenes", {}).get("scenes", [])
         scene = scenes[0] if scenes else None
         streams = playing_data.get("sceneStreams") or []
@@ -65,6 +91,8 @@ class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "scene": scene,
             "is_streaming": bool(streams),
             "streams": streams,
+            **stats,
+            "version": version,
         }
 
 
@@ -113,7 +141,7 @@ async def _async_handle_debug_connection(hass: HomeAssistant, call: ServiceCall)
             continue
 
         client: StashGraphQLClient = data[CLIENT_KEY]
-        _LOGGER.info("Running stash_player debug_connection for entry=%s url=%s", target_entry_id, client.stash_url)
+        _LOGGER.info("Running stash_player debug_connection for entry=%s url=%s endpoint=%s", target_entry_id, client.stash_url, client.endpoint)
         try:
             await client.validate_connection()
             _LOGGER.info("stash_player debug_connection successful for entry=%s", target_entry_id)
