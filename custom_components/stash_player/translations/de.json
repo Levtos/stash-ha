@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Mit Stash verbinden",
-        "description": "Stash URL und API-Schlüssel eingeben. Beispiele: https://stash.example.com, http://192.168.1.100:9999 oder 192.168.1.100 (wird automatisch zu http:// ergänzt).",
+        "description": "Stash URL und API-Schlüssel eingeben. Beispiele: https://stash.example.com, http://192.168.178.113:9999 oder 192.168.178.113 (wird automatisch zu http:// ergänzt). Die Integration testet automatisch /graphql und /api/graphql.",
         "data": {
           "stash_url": "Stash Server URL",
           "api_key": "API-Schlüssel"
@@ -16,7 +16,8 @@
           "player_name": "Player-Name",
           "poll_interval": "Abfrageintervall (Sekunden)",
           "use_webhook": "Stash-Webhooks verwenden",
-          "nsfw_mode": "Inhalts-Modus"
+          "nsfw_mode": "Inhalts-Modus",
+          "debug_logging": "Debug-Protokollierung aktivieren"
         }
       },
       "webhook": {
@@ -41,7 +42,8 @@
           "player_name": "Player-Name",
           "poll_interval": "Abfrageintervall (Sekunden)",
           "use_webhook": "Stash-Webhooks verwenden",
-          "nsfw_mode": "Inhalts-Modus"
+          "nsfw_mode": "Inhalts-Modus",
+          "debug_logging": "Debug-Protokollierung aktivieren"
         }
       },
       "webhook": {

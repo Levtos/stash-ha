@@ -45,6 +45,7 @@ class StashGraphQLClient:
         self._stash_url = stash_url.rstrip("/")
         self._api_key = api_key.strip()
         self._endpoint = f"{self._stash_url}/graphql"
+        self._debug_logging = debug_logging
 
     @property
     def stash_url(self) -> str:

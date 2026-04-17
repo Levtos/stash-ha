@@ -25,24 +25,19 @@ from .const import (
     SAVE_ACTIVITY_MUTATION,
 )
 
-NUM_PLAYERS = 2
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up media player entities from config entry."""
+    """Set up media player entity from config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        StashMediaPlayer(entry, data[COORDINATOR_KEY], data[CLIENT_KEY], index)
-        for index in range(NUM_PLAYERS)
-    ])
+    async_add_entities([StashMediaPlayer(entry, data[COORDINATOR_KEY], data[CLIENT_KEY])])
 
 
 class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
-    """Representation of a Stash media player slot."""
+    """Representation of a Stash media player."""
 
     _attr_media_content_type = MediaType.VIDEO
     _attr_supported_features = (
@@ -53,11 +48,10 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         | MediaPlayerEntityFeature.VOLUME_SET
     )
 
-    def __init__(self, entry: ConfigEntry, coordinator, client, index: int) -> None:
+    def __init__(self, entry: ConfigEntry, coordinator, client) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._client = client
-        self._index = index
         self._position_updated_at: datetime | None = None
         self._manual_state: str | None = None
 
@@ -72,8 +66,7 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def _scene(self) -> dict[str, Any]:
-        scenes = (self.coordinator.data or {}).get("scenes", [])
-        return scenes[self._index] if self._index < len(scenes) else {}
+        return (self.coordinator.data or {}).get("scene") or {}
 
     @property
     def state(self) -> str | None:
@@ -117,7 +110,7 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def entity_picture(self) -> str | None:
-        return f"/api/camera_proxy/camera.{self._entry.entry_id}_cover_{self._index + 1}"
+        return f"/api/camera_proxy/camera.{self._entry.entry_id}_cover"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -171,9 +164,7 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         if not scene_id:
             return
         await self._client.query(SAVE_ACTIVITY_MUTATION, {"id": scene_id, "pos": float(position)})
-        scenes = (self.coordinator.data or {}).get("scenes", [])
-        if self._index < len(scenes):
-            scenes[self._index]["resume_time"] = float(position)
+        self._scene["resume_time"] = float(position)
         self._manual_state = None
         self._position_updated_at = dt_util.utcnow()
         self.async_write_ha_state()

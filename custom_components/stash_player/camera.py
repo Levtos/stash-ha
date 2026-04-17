@@ -24,26 +24,21 @@ from .const import (
     NSFW_HIDDEN,
 )
 
-NUM_CAMERAS = 2
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up camera entities from config entry."""
+    """Set up camera entity from config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        StashCoverCamera(entry, data[COORDINATOR_KEY], index)
-        for index in range(NUM_CAMERAS)
-    ])
+    async_add_entities([StashCoverCamera(entry, data[COORDINATOR_KEY])])
 
 
 class StashCoverCamera(CoordinatorEntity, Camera):
     """Proxy camera for Stash screenshot with optional content filtering."""
 
-    def __init__(self, entry: ConfigEntry, coordinator, index: int) -> None:
+    def __init__(self, entry: ConfigEntry, coordinator) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._index = index
