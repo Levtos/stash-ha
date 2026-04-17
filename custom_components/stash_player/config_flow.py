@@ -34,6 +34,7 @@ from .const import (
 from .graphql import (
     StashConnectionError,
     StashGraphQLClient,
+    StashGraphQLError,
     StashInvalidURLError,
     normalize_stash_url,
 )
