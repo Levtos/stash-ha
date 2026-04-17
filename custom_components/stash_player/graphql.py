@@ -40,7 +40,7 @@ def normalize_stash_url(raw_url: str) -> str:
 class StashGraphQLClient:
     """Async GraphQL client for Stash API."""
 
-    def __init__(self, session: aiohttp.ClientSession, stash_url: str, api_key: str = "") -> None:
+    def __init__(self, session: aiohttp.ClientSession, stash_url: str, api_key: str = "", debug_logging: bool = False) -> None:
         self._session = session
         self._stash_url = stash_url.rstrip("/")
         self._api_key = api_key.strip()
@@ -50,6 +50,10 @@ class StashGraphQLClient:
     @property
     def stash_url(self) -> str:
         return self._stash_url
+
+    @property
+    def endpoint(self) -> str:
+        return self._endpoint
 
     async def _post(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         """Execute a GraphQL query/mutation, return the inner data dict."""
@@ -75,7 +79,8 @@ class StashGraphQLClient:
 
         if errors := data.get("errors"):
             msg = errors[0].get("message", "Unknown GraphQL error")
-            if "auth" in msg.lower() or "permission" in msg.lower():
+            msg_lower = msg.lower()
+            if any(k in msg_lower for k in ("auth", "permission", "not logged in", "unauthorized", "forbidden")):
                 raise ConfigEntryAuthFailed(msg)
             raise StashGraphQLError(msg)
 

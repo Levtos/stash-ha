@@ -41,10 +41,9 @@ class StashCoverCamera(CoordinatorEntity, Camera):
     def __init__(self, entry: ConfigEntry, coordinator) -> None:
         super().__init__(coordinator)
         self._entry = entry
-        self._index = index
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
-        self._attr_unique_id = f"{entry.entry_id}_cover_{index + 1}"
-        self._attr_name = f"{player_name} Cover {index + 1}"
+        self._attr_unique_id = f"{entry.entry_id}_cover"
+        self._attr_name = f"{player_name} Cover"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=player_name,
@@ -53,8 +52,7 @@ class StashCoverCamera(CoordinatorEntity, Camera):
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         """Return current scene screenshot."""
-        scenes = (self.coordinator.data or {}).get("scenes", [])
-        scene = scenes[self._index] if self._index < len(scenes) else {}
+        scene = (self.coordinator.data or {}).get("scene") or {}
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
         if not screenshot_url:
             return self._placeholder_image()

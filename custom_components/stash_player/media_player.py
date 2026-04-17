@@ -56,8 +56,8 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._manual_state: str | None = None
 
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
-        self._attr_unique_id = f"{entry.entry_id}_player_{index + 1}"
-        self._attr_name = f"{player_name} {index + 1}"
+        self._attr_unique_id = f"{entry.entry_id}_player"
+        self._attr_name = player_name
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=player_name,
