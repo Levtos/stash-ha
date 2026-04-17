@@ -27,7 +27,12 @@ from .const import (
     DOMAIN,
     NSFW_MODES,
 )
-from .graphql import StashConnectionError, StashGraphQLClient
+from .graphql import (
+    StashConnectionError,
+    StashGraphQLClient,
+    StashInvalidURLError,
+    normalize_stash_url,
+)
 
 
 class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -47,23 +52,39 @@ class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             stash_url = user_input[CONF_STASH_URL]
             api_key = user_input[CONF_API_KEY]
             session = aiohttp_client.async_get_clientsession(self.hass)
-            client = StashGraphQLClient(session, stash_url, api_key)
 
             try:
-                await client.validate_connection()
-            except StashConnectionError:
-                errors["base"] = "cannot_connect"
-            except ConfigEntryAuthFailed:
-                errors["base"] = "invalid_auth"
-            else:
-                await self.async_set_unique_id(stash_url.rstrip("/").lower())
-                self._abort_if_unique_id_configured()
-                self._connection_data = user_input
-                return await self.async_step_options()
+                normalized_url = normalize_stash_url(stash_url)
+            except StashInvalidURLError:
+                errors["base"] = "invalid_url"
+                normalized_url = stash_url
+
+            client = StashGraphQLClient(session, normalized_url, api_key) if not errors else None
+
+            if client is not None:
+                try:
+                    await client.validate_connection()
+                except StashInvalidURLError:
+                    errors["base"] = "invalid_url"
+                except StashConnectionError:
+                    errors["base"] = "cannot_connect"
+                except ConfigEntryAuthFailed:
+                    errors["base"] = "invalid_auth"
+                else:
+                    await self.async_set_unique_id(normalized_url.lower())
+                    self._abort_if_unique_id_configured()
+                    self._connection_data = {
+                        CONF_STASH_URL: normalized_url,
+                        CONF_API_KEY: api_key.strip(),
+                    }
+                    return await self.async_step_options()
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_STASH_URL): selector.TextSelector(),
+                vol.Required(
+                    CONF_STASH_URL,
+                    default="http://192.168.178.113:9999",
+                ): selector.TextSelector(),
                 vol.Required(CONF_API_KEY): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
                 ),

@@ -16,13 +16,37 @@ class StashGraphQLError(Exception):
     """Raised for non-auth GraphQL issues."""
 
 
+class StashInvalidURLError(Exception):
+    """Raised when the configured Stash URL is not valid."""
+
+
+def normalize_stash_url(raw_url: str) -> str:
+    """Normalize user-entered Stash URL.
+
+    Accepts host-only values like `192.168.178.113` and automatically prefixes
+    `http://` when no scheme is provided.
+    """
+    url = (raw_url or "").strip()
+    if not url:
+        raise StashInvalidURLError("URL is empty")
+
+    if "://" not in url:
+        url = f"http://{url}"
+
+    parsed = aiohttp.client_reqrep.URL(url)
+    if parsed.scheme not in ("http", "https") or not parsed.host:
+        raise StashInvalidURLError("URL must include a valid host and http/https scheme")
+
+    return str(parsed.with_path("").with_query(None).with_fragment(None)).rstrip("/")
+
+
 class StashGraphQLClient:
     """Simple GraphQL client for Stash API."""
 
     def __init__(self, session: aiohttp.ClientSession, stash_url: str, api_key: str) -> None:
         self._session = session
-        self._stash_url = stash_url.rstrip("/")
-        self._api_key = api_key
+        self._stash_url = normalize_stash_url(stash_url)
+        self._api_key = api_key.strip()
         self._endpoint = f"{self._stash_url}/graphql"
 
     @property
@@ -48,6 +72,8 @@ class StashGraphQLClient:
 
                 response.raise_for_status()
                 data = await response.json(content_type=None)
+        except aiohttp.InvalidURL as err:
+            raise StashInvalidURLError("Invalid Stash URL") from err
         except aiohttp.ClientError as err:
             raise StashConnectionError("Unable to reach Stash") from err
 
