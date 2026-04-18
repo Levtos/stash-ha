@@ -9,7 +9,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CLIENT_KEY, CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME, DOMAIN
-from .graphql import StashGraphQLClient
+from . import StashClient
 
 
 async def async_setup_entry(
@@ -17,8 +17,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up admin buttons."""
-    client: StashGraphQLClient = hass.data[DOMAIN][entry.entry_id][CLIENT_KEY]
+    client: StashClient = hass.data[DOMAIN][entry.entry_id][CLIENT_KEY]
     async_add_entities([
         StashScanLibraryButton(client, entry),
         StashCleanLibraryButton(client, entry),
@@ -33,7 +32,7 @@ class _BaseStashButton(ButtonEntity):
 
     _attr_has_entity_name = True
 
-    def __init__(self, client: StashGraphQLClient, entry: ConfigEntry) -> None:
+    def __init__(self, client: StashClient, entry: ConfigEntry) -> None:
         self._client = client
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
         self._attr_device_info = DeviceInfo(
@@ -51,7 +50,7 @@ class StashScanLibraryButton(_BaseStashButton):
         self._attr_icon = "mdi:database-search"
 
     async def async_press(self) -> None:
-        await self._client.async_metadata_scan()
+        await self._client.metadata_scan()
 
 
 class StashCleanLibraryButton(_BaseStashButton):
@@ -62,7 +61,7 @@ class StashCleanLibraryButton(_BaseStashButton):
         self._attr_icon = "mdi:broom"
 
     async def async_press(self) -> None:
-        await self._client.async_metadata_clean()
+        await self._client.metadata_clean()
 
 
 class StashGenerateMetadataButton(_BaseStashButton):
@@ -73,7 +72,7 @@ class StashGenerateMetadataButton(_BaseStashButton):
         self._attr_icon = "mdi:auto-fix"
 
     async def async_press(self) -> None:
-        await self._client.async_metadata_generate()
+        await self._client.metadata_generate()
 
 
 class StashAutoTagButton(_BaseStashButton):
@@ -84,7 +83,7 @@ class StashAutoTagButton(_BaseStashButton):
         self._attr_icon = "mdi:tag-multiple"
 
     async def async_press(self) -> None:
-        await self._client.async_metadata_auto_tag()
+        await self._client.metadata_auto_tag()
 
 
 class StashIdentifyScenesButton(_BaseStashButton):
@@ -95,4 +94,4 @@ class StashIdentifyScenesButton(_BaseStashButton):
         self._attr_icon = "mdi:magnify-scan"
 
     async def async_press(self) -> None:
-        await self._client.async_metadata_identify()
+        await self._client.metadata_identify()

@@ -21,8 +21,6 @@ from .const import (
     COORDINATOR_KEY,
     DEFAULT_PLAYER_NAME,
     DOMAIN,
-    GENERATE_SCREENSHOT_MUTATION,
-    SAVE_ACTIVITY_MUTATION,
 )
 
 
@@ -31,13 +29,17 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up media player entity from config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([StashMediaPlayer(entry, data[COORDINATOR_KEY], data[CLIENT_KEY])])
+    coordinator = data[COORDINATOR_KEY]
+    client = data[CLIENT_KEY]
+    async_add_entities([
+        StashMediaPlayer(entry, coordinator, client, 0),
+        StashMediaPlayer(entry, coordinator, client, 1),
+    ])
 
 
 class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
-    """Representation of a Stash media player."""
+    """Representation of a Stash media player slot."""
 
     _attr_media_content_type = MediaType.VIDEO
     _attr_supported_features = (
@@ -48,16 +50,18 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         | MediaPlayerEntityFeature.VOLUME_SET
     )
 
-    def __init__(self, entry: ConfigEntry, coordinator, client) -> None:
+    def __init__(self, entry: ConfigEntry, coordinator, client, index: int) -> None:
         super().__init__(coordinator)
         self._entry = entry
         self._client = client
+        self._index = index
         self._position_updated_at: datetime | None = None
         self._manual_state: str | None = None
 
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
-        self._attr_unique_id = f"{entry.entry_id}_player"
-        self._attr_name = player_name
+        slot = index + 1
+        self._attr_unique_id = f"{entry.entry_id}_player_{slot}"
+        self._attr_name = f"{player_name} {slot}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=player_name,
@@ -66,7 +70,8 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def _scene(self) -> dict[str, Any]:
-        return (self.coordinator.data or {}).get("scene") or {}
+        scenes = (self.coordinator.data or {}).get("scenes", [])
+        return scenes[self._index] if self._index < len(scenes) else {}
 
     @property
     def state(self) -> str | None:
@@ -110,7 +115,8 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def entity_picture(self) -> str | None:
-        return f"/api/camera_proxy/camera.{self._entry.entry_id}_cover"
+        slot = self._index + 1
+        return f"/api/camera_proxy/camera.{self._entry.entry_id}_cover_{slot}"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -141,7 +147,7 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_media_play(self) -> None:
         scene_id = self._scene.get("id")
         if scene_id:
-            await self._client.query(GENERATE_SCREENSHOT_MUTATION, {"id": scene_id})
+            await self._client.generate_screenshot(scene_id)
         self._manual_state = STATE_PLAYING
         self.async_write_ha_state()
 
@@ -151,22 +157,18 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     async def async_media_stop(self) -> None:
         self._manual_state = STATE_IDLE
-        scene = self._scene
-        if scene:
-            scene["resume_time"] = 0
         self.async_write_ha_state()
 
     async def async_set_volume_level(self, volume: float) -> None:
-        """No-op: Stash does not expose volume controls over GraphQL."""
+        pass
 
     async def async_media_seek(self, position: float) -> None:
         scene_id = self._scene.get("id")
         if not scene_id:
             return
-        await self._client.query(SAVE_ACTIVITY_MUTATION, {"id": scene_id, "pos": float(position)})
-        self._scene["resume_time"] = float(position)
-        self._manual_state = None
+        await self._client.save_activity(scene_id, float(position))
         self._position_updated_at = dt_util.utcnow()
+        self._manual_state = None
         self.async_write_ha_state()
 
     def _handle_coordinator_update(self) -> None:
