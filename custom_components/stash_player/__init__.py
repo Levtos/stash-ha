@@ -234,7 +234,8 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
                     if last_played:
                         try:
                             lp = dt_util.parse_datetime(last_played)
-                            is_recent = (dt_util.utcnow() - lp).total_seconds() < 300
+                            age = (dt_util.utcnow() - lp).total_seconds()
+                            is_recent = age < 7200
                         except Exception:
                             is_recent = True
                     _fix_paths(scene)
