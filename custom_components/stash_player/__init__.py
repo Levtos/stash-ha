@@ -1,7 +1,8 @@
-"""Stash Player integration."""
+"""Stash Player integration — based on Druidblack/stash-home-assistant."""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
 from typing import Any
@@ -9,134 +10,212 @@ from typing import Any
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_API_KEY
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
     ACTIVE_SCENE_QUERY,
     CLIENT_KEY,
-    CONF_DEBUG_LOGGING,
+    CONF_API_KEY,
     CONF_POLL_INTERVAL,
-    CONF_STASH_URL,
+    CONF_URL,
     CONF_USE_WEBHOOK,
     COORDINATOR_KEY,
-    DEFAULT_DEBUG_LOGGING,
-    DEFAULT_LIBRARY_POLL_INTERVAL,
     DEFAULT_POLL_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
     PLAYING_STATE_QUERY,
-    STASH_STATS_QUERY,
-    STASH_VERSION_QUERY,
     WEBHOOK_VIEW_KEY,
 )
-from .graphql import StashConnectionError, StashGraphQLClient, StashGraphQLError
 
 _LOGGER = logging.getLogger(__name__)
-SERVICE_DEBUG_CONNECTION = "debug_connection"
 
 
-class StashCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Polls active scene state every few seconds."""
+class StashError(Exception):
+    """Base error for Stash API."""
 
-    def __init__(self, hass: HomeAssistant, client: StashGraphQLClient, poll_interval: int) -> None:
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_interval=timedelta(seconds=max(2, poll_interval)),
+
+class StashClient:
+    """Simple async GraphQL client for Stash — based on Druidblack's implementation."""
+
+    def __init__(self, graphql_url: str, session, api_key: str = "") -> None:
+        self._url = graphql_url.rstrip("/")
+        self._session = session
+        self._api_key = api_key.strip()
+        # Derive base URL for constructing scene links
+        self._base_url = self._url[:-len("/graphql")] if self._url.endswith("/graphql") else self._url
+
+    @property
+    def stash_url(self) -> str:
+        return self._base_url
+
+    def _headers(self) -> dict:
+        return {"ApiKey": self._api_key} if self._api_key else {}
+
+    async def _post(self, query: str, variables: dict | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"query": query}
+        if variables:
+            payload["variables"] = variables
+        async with asyncio.timeout(10):
+            async with self._session.post(self._url, json=payload, headers=self._headers()) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise StashError(f"HTTP {resp.status}: {text}")
+                data = await resp.json()
+        if "errors" in data:
+            raise StashError(f"GraphQL errors: {data['errors']}")
+        return data
+
+    async def _post_allow_errors(self, query: str) -> dict[str, Any]:
+        payload = {"query": query}
+        async with asyncio.timeout(10):
+            async with self._session.post(self._url, json=payload, headers=self._headers()) as resp:
+                if resp.status != 200:
+                    raise StashError(f"HTTP {resp.status}")
+                return await resp.json()
+
+    # ── Connection test ────────────────────────────────────────────────────────
+
+    async def validate(self) -> None:
+        await self._post("query { version { version } }")
+
+    # ── Library stats ──────────────────────────────────────────────────────────
+
+    async def get_scenes_count(self) -> int:
+        data = await self._post("query { findScenes { count } }")
+        return int(data["data"]["findScenes"]["count"])
+
+    async def get_movies_count(self) -> int:
+        raw = await self._post_allow_errors("query { findGroups { count } }")
+        try:
+            return int(raw["data"]["findGroups"]["count"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        raw2 = await self._post_allow_errors("query { findMovies { count } }")
+        try:
+            return int(raw2["data"]["findMovies"]["count"])
+        except (KeyError, TypeError, ValueError):
+            return 0
+
+    async def get_performers_count(self) -> int:
+        data = await self._post("query { findPerformers { count } }")
+        return int(data["data"]["findPerformers"]["count"])
+
+    async def get_studios_count(self) -> int:
+        data = await self._post("query { findStudios { count } }")
+        return int(data["data"]["findStudios"]["count"])
+
+    async def get_tags_count(self) -> int:
+        data = await self._post("query { findTags { count } }")
+        return int(data["data"]["findTags"]["count"])
+
+    async def get_images_count(self) -> int:
+        data = await self._post("query { findImages { count } }")
+        return int(data["data"]["findImages"]["count"])
+
+    async def get_galleries_count(self) -> int:
+        data = await self._post("query { findGalleries { count } }")
+        return int(data["data"]["findGalleries"]["count"])
+
+    async def get_markers_count(self) -> int:
+        data = await self._post("query { findSceneMarkers { count } }")
+        return int(data["data"]["findSceneMarkers"]["count"])
+
+    async def get_version(self) -> str | None:
+        data = await self._post("query { version { version } }")
+        try:
+            return str(data["data"]["version"]["version"])
+        except (KeyError, TypeError):
+            return None
+
+    # ── Playback queries ───────────────────────────────────────────────────────
+
+    async def get_active_scenes(self) -> list[dict]:
+        data = await self._post(ACTIVE_SCENE_QUERY)
+        return data.get("data", {}).get("findScenes", {}).get("scenes", [])
+
+    async def get_streams(self) -> list[dict]:
+        data = await self._post(PLAYING_STATE_QUERY)
+        return data.get("data", {}).get("sceneStreams") or []
+
+    async def generate_screenshot(self, scene_id: str) -> None:
+        await self._post_allow_errors(
+            f'mutation {{ sceneGenerateScreenshot(id: "{scene_id}") }}'
         )
-        self.client = client
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        try:
-            scene_data = await self.client.query(ACTIVE_SCENE_QUERY)
-            playing_data = await self.client.query(PLAYING_STATE_QUERY)
-        except (StashConnectionError, StashGraphQLError) as err:
-            _LOGGER.error("Coordinator update failed: %s", err)
-            raise UpdateFailed(f"Failed to update from Stash: {err}") from err
+    async def save_activity(self, scene_id: str, position: float) -> None:
+        await self._post_allow_errors(
+            f'mutation {{ sceneSaveActivity(id: "{scene_id}", resume_time: {position}) {{ id }} }}'
+        )
 
-        stats: dict[str, Any] = {}
-        version: str | None = None
+    # ── Admin mutations ────────────────────────────────────────────────────────
 
-        try:
-            stats_data = await self.client.query(STASH_STATS_QUERY)
-            stats = {
-                "scenes": (stats_data.get("findScenes") or {}).get("count"),
-                "movies": (stats_data.get("findMovies") or {}).get("count"),
-                "performers": (stats_data.get("findPerformers") or {}).get("count"),
-                "studios": (stats_data.get("findStudios") or {}).get("count"),
-                "tags": (stats_data.get("findTags") or {}).get("count"),
-                "images": (stats_data.get("findImages") or {}).get("count"),
-                "galleries": (stats_data.get("findGalleries") or {}).get("count"),
-                "markers": (stats_data.get("findSceneMarkers") or {}).get("count"),
-            }
-        except StashGraphQLError as err:
-            _LOGGER.debug("Stats query unavailable on this Stash instance: %s", err)
+    async def metadata_scan(self) -> None:
+        await self._post("mutation { metadataScan(input:{}) }")
 
-        try:
-            version_data = await self.client.query(STASH_VERSION_QUERY)
-            version = (version_data.get("version") or {}).get("version")
-        except StashGraphQLError as err:
-            _LOGGER.debug("Version query unavailable on this Stash instance: %s", err)
+    async def metadata_clean(self) -> None:
+        await self._post('mutation { metadataClean(input: {dryRun: false, paths: ""}) }')
 
-        scenes = scene_data.get("findScenes", {}).get("scenes", [])
-        scene = scenes[0] if scenes else None
-        streams = playing_data.get("sceneStreams") or []
-        return {
-            "scene": scene,
-            "is_streaming": bool(streams),
-            "streams": streams,
-            **stats,
-            "version": version,
-        }
+    async def metadata_generate(self) -> None:
+        await self._post("mutation { metadataGenerate(input: {}) }")
+
+    async def metadata_auto_tag(self) -> None:
+        await self._post("mutation { metadataAutoTag(input: {}) }")
+
+    async def metadata_identify(self) -> None:
+        await self._post(
+            'mutation { metadataIdentify(input: { sources: [{ source: { stash_box_endpoint: "https://stashdb.org/graphql" } }] }) }'
+        )
 
 
-class StashLibraryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+class StashLibraryCoordinator(DataUpdateCoordinator):
     """Polls library statistics every 5 minutes."""
 
-    def __init__(self, hass: HomeAssistant, client: StashGraphQLClient) -> None:
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=f"{DOMAIN}_library",
-            update_interval=timedelta(seconds=DEFAULT_LIBRARY_POLL_INTERVAL),
-        )
+    def __init__(self, hass: HomeAssistant, client: StashClient) -> None:
+        super().__init__(hass, _LOGGER, name=f"{DOMAIN}_library",
+                         update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL))
         self.client = client
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            scenes = await self.client.async_get_scenes_count()
-            movies = await self.client.async_get_movies_count()
-            performers = await self.client.async_get_performers_count()
-            studios = await self.client.async_get_studios_count()
-            tags = await self.client.async_get_tags_count()
-            images = await self.client.async_get_images_count()
-            galleries = await self.client.async_get_galleries_count()
-            markers = await self.client.async_get_markers_count()
-            version = await self.client.async_get_version()
-        except (StashConnectionError, StashGraphQLError) as err:
-            raise UpdateFailed(f"Library stats update failed: {err}") from err
+            return {
+                "scenes":     await self.client.get_scenes_count(),
+                "movies":     await self.client.get_movies_count(),
+                "performers": await self.client.get_performers_count(),
+                "studios":    await self.client.get_studios_count(),
+                "tags":       await self.client.get_tags_count(),
+                "images":     await self.client.get_images_count(),
+                "galleries":  await self.client.get_galleries_count(),
+                "markers":    await self.client.get_markers_count(),
+                "version":    await self.client.get_version(),
+            }
+        except Exception as err:
+            raise UpdateFailed(f"Library update failed: {err}") from err
 
-        return {
-            "scenes": scenes,
-            "movies": movies,
-            "performers": performers,
-            "studios": studios,
-            "tags": tags,
-            "images": images,
-            "galleries": galleries,
-            "markers": markers,
-            "version": version,
-        }
+
+class StashPlaybackCoordinator(DataUpdateCoordinator):
+    """Polls active scene state every few seconds."""
+
+    def __init__(self, hass: HomeAssistant, client: StashClient, poll_interval: int) -> None:
+        super().__init__(hass, _LOGGER, name=DOMAIN,
+                         update_interval=timedelta(seconds=max(2, poll_interval)))
+        self.client = client
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            scenes = await self.client.get_active_scenes()
+            streams = await self.client.get_streams()
+        except Exception as err:
+            raise UpdateFailed(f"Playback update failed: {err}") from err
+        return {"scenes": scenes, "is_streaming": bool(streams)}
 
 
 class StashWebhookView(HomeAssistantView):
-    """Receive webhook events from Stash and refresh coordinator."""
+    """Receive webhook POST from Stash and trigger immediate refresh."""
 
     requires_auth = False
 
@@ -146,76 +225,37 @@ class StashWebhookView(HomeAssistantView):
         self.name = f"api:stash_player:webhook:{entry_id}"
 
     async def post(self, request: web.Request) -> web.Response:
-        """Handle webhook POST from Stash."""
-        _payload = await request.json(content_type=None)
-        entry_id = self.url.rsplit("/", 1)[-1]
-        entry_data = self.hass.data.get(DOMAIN, {}).get(entry_id, {})
-        coordinator: StashCoordinator | None = entry_data.get(COORDINATOR_KEY)
+        await request.json(content_type=None)
+        data = self.hass.data.get(DOMAIN, {}).get(self.url.rsplit("/", 1)[-1], {})
+        coordinator = data.get(COORDINATOR_KEY)
         if coordinator:
             self.hass.async_create_task(coordinator.async_request_refresh())
         return self.json({"ok": True})
 
 
-async def _async_handle_debug_connection(hass: HomeAssistant, call: ServiceCall) -> None:
-    """Manual service for debugging connectivity issues."""
-    entry_id: str | None = call.data.get("entry_id")
-    entries = hass.data.get(DOMAIN, {})
-
-    if entry_id:
-        targets = [(entry_id, entries.get(entry_id))]
-    else:
-        targets = list(entries.items())
-
-    if not targets:
-        _LOGGER.warning("No stash_player entries available for debug_connection")
-        return
-
-    for target_entry_id, data in targets:
-        if not data:
-            _LOGGER.warning("Entry %s not found for debug_connection", target_entry_id)
-            continue
-
-        client: StashGraphQLClient = data[CLIENT_KEY]
-        _LOGGER.info("Running stash_player debug_connection for entry=%s url=%s endpoint=%s", target_entry_id, client.stash_url, client.endpoint)
-        try:
-            await client.validate_connection()
-            _LOGGER.info("stash_player debug_connection successful for entry=%s", target_entry_id)
-        except Exception as err:
-            _LOGGER.error("stash_player debug_connection failed for entry=%s: %s", target_entry_id, err)
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Stash Player from a config entry."""
-    session = aiohttp_client.async_get_clientsession(hass)
-    stash_url: str = entry.data[CONF_STASH_URL]
+    session = async_get_clientsession(hass)
+    graphql_url: str = entry.data[CONF_URL]
     api_key: str = entry.data.get(CONF_API_KEY, "")
 
-    debug_logging = bool(entry.options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING))
-    client = StashGraphQLClient(session, stash_url, api_key, debug_logging=debug_logging)
+    client = StashClient(graphql_url, session, api_key)
 
     poll_interval = int(entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
-
-    playback_coordinator = StashCoordinator(hass, client, poll_interval)
-    library_coordinator = StashLibraryCoordinator(hass, client)
+    playback = StashPlaybackCoordinator(hass, client, poll_interval)
+    library = StashLibraryCoordinator(hass, client)
 
     try:
-        await playback_coordinator.async_config_entry_first_refresh()
-        await library_coordinator.async_config_entry_first_refresh()
+        await playback.async_config_entry_first_refresh()
+        await library.async_config_entry_first_refresh()
     except Exception as err:
-        _LOGGER.error("Initial Stash refresh failed for %s: %s", stash_url, err)
         raise ConfigEntryNotReady(str(err)) from err
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        COORDINATOR_KEY: playback_coordinator,
-        LIBRARY_COORDINATOR_KEY: library_coordinator,
+        COORDINATOR_KEY: playback,
+        LIBRARY_COORDINATOR_KEY: library,
         CLIENT_KEY: client,
     }
-
-    if not hass.services.has_service(DOMAIN, SERVICE_DEBUG_CONNECTION):
-        async def _debug_service(call: ServiceCall) -> None:
-            await _async_handle_debug_connection(hass, call)
-
-        hass.services.async_register(DOMAIN, SERVICE_DEBUG_CONNECTION, _debug_service)
 
     if entry.options.get(CONF_USE_WEBHOOK, False):
         view = StashWebhookView(hass, entry.entry_id)
@@ -223,15 +263,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.entry_id][WEBHOOK_VIEW_KEY] = view
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    _LOGGER.info("stash_player setup complete for %s", stash_url)
+    _LOGGER.info("Stash Player connected to %s", graphql_url)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
-        if not hass.data.get(DOMAIN) and hass.services.has_service(DOMAIN, SERVICE_DEBUG_CONNECTION):
-            hass.services.async_remove(DOMAIN, SERVICE_DEBUG_CONNECTION)
     return unload_ok

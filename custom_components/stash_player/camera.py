@@ -6,7 +6,6 @@ import io
 
 from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.entity import DeviceInfo
@@ -14,9 +13,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    COORDINATOR_KEY,
+    CONF_API_KEY,
     CONF_NSFW_MODE,
     CONF_PLAYER_NAME,
+    COORDINATOR_KEY,
     DEFAULT_NSFW_MODE,
     DEFAULT_PLAYER_NAME,
     DOMAIN,
@@ -30,20 +30,24 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up camera entity from config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([StashCoverCamera(entry, data[COORDINATOR_KEY])])
+    coordinator = hass.data[DOMAIN][entry.entry_id][COORDINATOR_KEY]
+    async_add_entities([
+        StashCoverCamera(entry, coordinator, 0),
+        StashCoverCamera(entry, coordinator, 1),
+    ])
 
 
 class StashCoverCamera(CoordinatorEntity, Camera):
     """Proxy camera for Stash screenshot with optional content filtering."""
 
-    def __init__(self, entry: ConfigEntry, coordinator) -> None:
+    def __init__(self, entry: ConfigEntry, coordinator, index: int) -> None:
         super().__init__(coordinator)
         self._entry = entry
+        self._index = index
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
-        self._attr_unique_id = f"{entry.entry_id}_cover"
-        self._attr_name = f"{player_name} Cover"
+        slot = index + 1
+        self._attr_unique_id = f"{entry.entry_id}_cover_{slot}"
+        self._attr_name = f"{player_name} Cover {slot}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=player_name,
@@ -51,8 +55,8 @@ class StashCoverCamera(CoordinatorEntity, Camera):
         )
 
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
-        """Return current scene screenshot."""
-        scene = (self.coordinator.data or {}).get("scene") or {}
+        scenes = (self.coordinator.data or {}).get("scenes", [])
+        scene = scenes[self._index] if self._index < len(scenes) else {}
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
         if not screenshot_url:
             return self._placeholder_image()
@@ -78,7 +82,6 @@ class StashCoverCamera(CoordinatorEntity, Camera):
     async def _blur_image(self, data: bytes) -> bytes:
         try:
             from PIL import Image, ImageFilter
-
             img = Image.open(io.BytesIO(data))
             blurred = img.filter(ImageFilter.GaussianBlur(radius=30))
             output = io.BytesIO()
