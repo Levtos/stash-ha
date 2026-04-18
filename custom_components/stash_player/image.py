@@ -37,17 +37,17 @@ async def async_setup_entry(
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id][COORDINATOR_KEY]
     async_add_entities([
-        StashCoverImage(entry, coordinator, 0),
-        StashCoverImage(entry, coordinator, 1),
+        StashCoverImage(entry, coordinator, 0, hass),
+        StashCoverImage(entry, coordinator, 1, hass),
     ])
 
 
 class StashCoverImage(CoordinatorEntity, ImageEntity):
     """Static screenshot image for a Stash playback slot."""
 
-    def __init__(self, entry: ConfigEntry, coordinator, index: int) -> None:
+    def __init__(self, entry: ConfigEntry, coordinator, index: int, hass: HomeAssistant) -> None:
         CoordinatorEntity.__init__(self, coordinator)
-        ImageEntity.__init__(self)
+        ImageEntity.__init__(self, hass)
         self._entry = entry
         self._index = index
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
