@@ -105,6 +105,6 @@ mutation GenerateScreenshot($id: ID!) {
 
 SAVE_ACTIVITY_MUTATION = """
 mutation SaveScene($id: ID!, $pos: Float!) {
-  sceneSaveActivity(id: $id, resume_time: $pos) { id }
+  sceneSaveActivity(id: $id, resume_time: $pos)
 }
 """

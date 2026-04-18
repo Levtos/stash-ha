@@ -141,7 +141,7 @@ class StashClient:
 
     async def save_activity(self, scene_id: str, position: float) -> None:
         await self._post_allow_errors(
-            f'mutation {{ sceneSaveActivity(id: "{scene_id}", resume_time: {position}) {{ id }} }}'
+            f'mutation {{ sceneSaveActivity(id: "{scene_id}", resume_time: {position}) }}'
         )
 
     # ── Admin mutations ────────────────────────────────────────────────────────
