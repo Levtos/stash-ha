@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import re
 from typing import Any
 
 from aiohttp import web
@@ -16,7 +17,6 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
-    ACTIVE_SCENE_QUERY,
     CLIENT_KEY,
     CONF_API_KEY,
     CONF_POLL_INTERVAL,
@@ -29,6 +29,7 @@ from .const import (
     LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
     PLAYING_STATE_QUERY,
+    SCENE_BY_ID_QUERY,
     WEBHOOK_VIEW_KEY,
 )
 
@@ -132,15 +133,7 @@ class StashClient:
         except (KeyError, TypeError):
             return None
 
-    # ── Playback queries ───────────────────────────────────────────────────────
-
-    async def get_active_scenes(self) -> list[dict]:
-        data = await self._post(ACTIVE_SCENE_QUERY)
-        return data.get("data", {}).get("findScenes", {}).get("scenes", [])
-
-    async def get_streams(self) -> list[dict]:
-        data = await self._post_allow_errors(PLAYING_STATE_QUERY)
-        return (data.get("data") or {}).get("sceneStreams") or []
+    # ── Playback mutations ─────────────────────────────────────────────────────
 
     async def generate_screenshot(self, scene_id: str) -> None:
         await self._post_allow_errors(
@@ -207,11 +200,26 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            scenes = await self.client.get_active_scenes()
-            streams = await self.client.get_streams()
+            raw = await self.client._post_allow_errors(PLAYING_STATE_QUERY)
+            streams = (raw.get("data") or {}).get("sceneStreams") or []
+            is_streaming = bool(streams)
+
+            # Parse scene IDs from stream URLs (e.g. /scene/123/stream)
+            scene_ids: list[str] = []
+            for stream in streams:
+                m = re.search(r"/scene/(\d+)/", stream.get("url", ""))
+                if m and m.group(1) not in scene_ids:
+                    scene_ids.append(m.group(1))
+
+            scenes: list[dict] = []
+            for sid in scene_ids[:2]:
+                data = await self.client._post(SCENE_BY_ID_QUERY, {"id": sid})
+                scene = (data.get("data") or {}).get("findScene")
+                if scene:
+                    scenes.append(scene)
         except Exception as err:
             raise UpdateFailed(f"Playback update failed: {err}") from err
-        return {"scenes": scenes, "is_streaming": bool(streams)}
+        return {"scenes": scenes, "is_streaming": is_streaming}
 
 
 class StashWebhookView(HomeAssistantView):

@@ -54,6 +54,10 @@ class StashCoverCamera(CoordinatorEntity, Camera):
             manufacturer="Stash",
         )
 
+    @property
+    def available(self) -> bool:
+        return True
+
     async def async_camera_image(self, width: int | None = None, height: int | None = None) -> bytes | None:
         scenes = (self.coordinator.data or {}).get("scenes", [])
         scene = scenes[self._index] if self._index < len(scenes) else {}

@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CLIENT_KEY,
+    CONF_API_KEY,
     CONF_PLAYER_NAME,
     COORDINATOR_KEY,
     DEFAULT_PLAYER_NAME,
@@ -115,8 +116,11 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def entity_picture(self) -> str | None:
-        slot = self._index + 1
-        return f"/api/camera_proxy/camera.{self._entry.entry_id}_cover_{slot}"
+        screenshot = (self._scene.get("paths") or {}).get("screenshot")
+        if not screenshot:
+            return None
+        api_key = self._entry.data.get(CONF_API_KEY, "")
+        return f"{screenshot}?apikey={api_key}" if api_key else screenshot
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

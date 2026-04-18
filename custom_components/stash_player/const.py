@@ -69,6 +69,30 @@ query PlayingState {
 }
 """
 
+SCENE_BY_ID_QUERY = """
+query SceneById($id: ID!) {
+  findScene(id: $id) {
+    id
+    title
+    rating100
+    play_count
+    resume_time
+    paths {
+      screenshot
+    }
+    performers { name }
+    tags { name }
+    studio { name }
+    files {
+      duration
+      size
+      width
+      height
+    }
+  }
+}
+"""
+
 GENERATE_SCREENSHOT_MUTATION = """
 mutation GenerateScreenshot($id: ID!) {
   sceneGenerateScreenshot(id: $id)
