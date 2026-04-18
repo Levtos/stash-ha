@@ -139,8 +139,8 @@ class StashClient:
         return data.get("data", {}).get("findScenes", {}).get("scenes", [])
 
     async def get_streams(self) -> list[dict]:
-        data = await self._post(PLAYING_STATE_QUERY)
-        return data.get("data", {}).get("sceneStreams") or []
+        data = await self._post_allow_errors(PLAYING_STATE_QUERY)
+        return (data.get("data") or {}).get("sceneStreams") or []
 
     async def generate_screenshot(self, scene_id: str) -> None:
         await self._post_allow_errors(
