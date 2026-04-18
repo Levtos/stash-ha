@@ -28,14 +28,17 @@ LIBRARY_COORDINATOR_KEY = "library_coordinator"
 CLIENT_KEY = "client"
 WEBHOOK_VIEW_KEY = "webhook_view"
 
-PLATFORMS = ["media_player", "camera", "sensor", "button", "binary_sensor"]
+PLATFORMS = ["media_player", "image", "sensor", "button", "binary_sensor"]
 
 # ── GraphQL queries (playback) ────────────────────────────────────────────────
 
 ACTIVE_SCENE_QUERY = """
 query ActiveScene {
   findScenes(
-    filter: { per_page: 2, sort: "updated_at", direction: DESC }
+    scene_filter: {
+      last_played_at: { modifier: NOT_NULL, value: "" }
+    }
+    filter: { per_page: 2, sort: "last_played_at", direction: DESC }
   ) {
     scenes {
       id
@@ -43,6 +46,7 @@ query ActiveScene {
       rating100
       play_count
       resume_time
+      last_played_at
       paths {
         screenshot
       }

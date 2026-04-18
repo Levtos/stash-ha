@@ -17,6 +17,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    ACTIVE_SCENE_QUERY,
     CLIENT_KEY,
     CONF_API_KEY,
     CONF_POLL_INTERVAL,
@@ -28,8 +29,6 @@ from .const import (
     DOMAIN,
     LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
-    PLAYING_STATE_QUERY,
-    SCENE_BY_ID_QUERY,
     WEBHOOK_VIEW_KEY,
 )
 
@@ -200,23 +199,37 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            raw = await self.client._post_allow_errors(PLAYING_STATE_QUERY)
-            streams = (raw.get("data") or {}).get("sceneStreams") or []
-            is_streaming = bool(streams)
+            raw = await self.client._post_allow_errors(ACTIVE_SCENE_QUERY)
+            scenes_raw = ((raw.get("data") or {}).get("findScenes") or {}).get("scenes") or []
 
-            # Parse scene IDs from stream URLs (e.g. /scene/123/stream)
-            scene_ids: list[str] = []
-            for stream in streams:
-                m = re.search(r"/scene/(\d+)/", stream.get("url", ""))
-                if m and m.group(1) not in scene_ids:
-                    scene_ids.append(m.group(1))
-
+            base = self.client.stash_url
             scenes: list[dict] = []
-            for sid in scene_ids[:2]:
-                data = await self.client._post(SCENE_BY_ID_QUERY, {"id": sid})
-                scene = (data.get("data") or {}).get("findScene")
-                if scene:
-                    scenes.append(scene)
+            for scene in scenes_raw:
+                # Fix localhost screenshot URLs so HA can reach them
+                paths = scene.get("paths") or {}
+                if paths.get("screenshot"):
+                    paths["screenshot"] = (
+                        paths["screenshot"]
+                        .replace("http://localhost:9999", base)
+                        .replace("https://localhost:9999", base)
+                    )
+                    scene["paths"] = paths
+
+                # "Active" heuristic: last_played_at within 10 minutes
+                last_played = scene.get("last_played_at")
+                if last_played:
+                    try:
+                        from homeassistant.util import dt as dt_util
+                        lp = dt_util.parse_datetime(last_played)
+                        scene["_is_recent"] = (dt_util.utcnow() - lp).total_seconds() < 600
+                    except Exception:
+                        scene["_is_recent"] = True
+                else:
+                    scene["_is_recent"] = False
+
+                scenes.append(scene)
+
+            is_streaming = any(s.get("_is_recent") for s in scenes)
         except Exception as err:
             raise UpdateFailed(f"Playback update failed: {err}") from err
         return {"scenes": scenes, "is_streaming": is_streaming}
