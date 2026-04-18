@@ -80,8 +80,6 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
         nsfw_mode = self._entry.options.get(CONF_NSFW_MODE, DEFAULT_NSFW_MODE)
         if nsfw_mode == NSFW_HIDDEN:
             return None
-        if not scene.get("_is_recent", True):
-            return None
 
         session = aiohttp_client.async_get_clientsession(self.hass)
         api_key = self._entry.data.get(CONF_API_KEY, "")

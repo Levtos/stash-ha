@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from homeassistant.helpers import entity_registry as er
+
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import MediaPlayerEntityFeature, MediaType
 from homeassistant.config_entries import ConfigEntry
@@ -116,7 +118,10 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         if not self._scene:
             return None
         slot = self._index + 1
-        return f"/api/image_proxy/image.{DOMAIN}_cover_{slot}"
+        unique_id = f"{self._entry.entry_id}_cover_{slot}"
+        registry = er.async_get(self.hass)
+        entity_id = registry.async_get_entity_id("image", DOMAIN, unique_id)
+        return f"/api/image_proxy/{entity_id}" if entity_id else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
