@@ -43,7 +43,7 @@ async def async_setup_entry(
 
 
 class StashCoverImage(CoordinatorEntity, ImageEntity):
-    """Static screenshot image for a Stash playback slot."""
+    """Screenshot image for a Stash playback slot."""
 
     def __init__(self, entry: ConfigEntry, coordinator, index: int, hass: HomeAssistant) -> None:
         CoordinatorEntity.__init__(self, coordinator)
@@ -54,13 +54,13 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
         slot = index + 1
         self._attr_unique_id = f"{entry.entry_id}_cover_{slot}"
         self._attr_name = f"{player_name} Cover {slot}"
+        self._attr_content_type = "image/jpeg"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=player_name,
             manufacturer="Stash",
         )
         self._attr_image_last_updated: datetime | None = dt_util.utcnow()
-        self._attr_content_type = "image/jpeg"
 
     @property
     def available(self) -> bool:
@@ -73,6 +73,10 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
     async def async_image(self) -> bytes | None:
         scenes = (self.coordinator.data or {}).get("scenes", [])
         scene = scenes[self._index] if self._index < len(scenes) else {}
+
+        if not scene.get("_is_recent", False):
+            return None
+
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
         if not screenshot_url:
             return None
