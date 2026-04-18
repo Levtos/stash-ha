@@ -28,7 +28,7 @@ LIBRARY_COORDINATOR_KEY = "library_coordinator"
 CLIENT_KEY = "client"
 WEBHOOK_VIEW_KEY = "webhook_view"
 
-PLATFORMS = ["media_player", "camera", "sensor", "button", "binary_sensor"]
+PLATFORMS = ["media_player", "image", "sensor", "button", "binary_sensor"]
 
 # ── GraphQL queries (playback) ────────────────────────────────────────────────
 
