@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import io
+import logging
 from datetime import datetime
+
+_LOGGER = logging.getLogger(__name__)
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
@@ -57,6 +60,7 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
             manufacturer="Stash",
         )
         self._attr_image_last_updated: datetime | None = dt_util.utcnow()
+        self._attr_content_type = "image/jpeg"
 
     @property
     def available(self) -> bool:
@@ -84,11 +88,16 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
             async with session.get(screenshot_url, headers=headers) as resp:
                 resp.raise_for_status()
                 data = await resp.read()
-        except Exception:
+        except Exception as err:
+            _LOGGER.warning("Stash cover fetch failed for %s: %s", screenshot_url, err)
             return None
 
         if nsfw_mode == NSFW_BLUR:
-            return await self._blur_image(data)
+            try:
+                from PIL import Image
+                return await self._blur_image(data)
+            except ImportError:
+                pass
         return data
 
     async def _blur_image(self, data: bytes) -> bytes:
