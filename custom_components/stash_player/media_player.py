@@ -81,9 +81,7 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             return STATE_IDLE
         if self._manual_state in (STATE_PAUSED, STATE_IDLE):
             return self._manual_state
-        resume_time = float(scene.get("resume_time", 0) or 0)
-        is_streaming = bool((self.coordinator.data or {}).get("is_streaming"))
-        if resume_time > 0 and is_streaming:
+        if scene.get("_is_recent"):
             return STATE_PLAYING
         return STATE_IDLE
 
