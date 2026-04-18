@@ -233,6 +233,17 @@ class StashWebhookView(HomeAssistantView):
         return self.json({"ok": True})
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate config entry from version 1 (used stash_url key) to version 2 (url key)."""
+    if entry.version < 2:
+        new_data = dict(entry.data)
+        if "stash_url" in new_data and CONF_URL not in new_data:
+            new_data[CONF_URL] = new_data.pop("stash_url")
+        hass.config_entries.async_update_entry(entry, data=new_data, version=2)
+        _LOGGER.info("Migrated Stash Player config entry to version 2")
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Stash Player from a config entry."""
     session = async_get_clientsession(hass)

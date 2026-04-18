@@ -76,7 +76,7 @@ async def _normalize_and_test(hass, raw_url: str, api_key: str) -> str:
 class StashPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle config flow for Stash Player."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         self._connection_data: dict[str, Any] = {}
