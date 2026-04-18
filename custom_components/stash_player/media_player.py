@@ -5,13 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from homeassistant.helpers import entity_registry as er
-
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import MediaPlayerEntityFeature, MediaType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_IDLE, STATE_PAUSED, STATE_PLAYING
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -49,7 +48,6 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         | MediaPlayerEntityFeature.PAUSE
         | MediaPlayerEntityFeature.STOP
         | MediaPlayerEntityFeature.SEEK
-        | MediaPlayerEntityFeature.VOLUME_SET
     )
 
     def __init__(self, entry: ConfigEntry, coordinator, client, index: int) -> None:
@@ -63,12 +61,17 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
         slot = index + 1
         self._attr_unique_id = f"{entry.entry_id}_player_{slot}"
-        self._attr_name = f"{player_name} {slot}"
+        self._default_name = f"{player_name} {slot}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=player_name,
             manufacturer="Stash",
         )
+
+    @property
+    def name(self) -> str:
+        title = self._scene.get("title")
+        return title if title else self._default_name
 
     @property
     def _scene(self) -> dict[str, Any]:
@@ -88,7 +91,7 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def media_title(self) -> str:
-        return self._scene.get("title", "Unknown")
+        return self._scene.get("title", "")
 
     @property
     def media_artist(self) -> str:
@@ -150,9 +153,6 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         }
 
     async def async_media_play(self) -> None:
-        scene_id = self._scene.get("id")
-        if scene_id:
-            await self._client.generate_screenshot(scene_id)
         self._manual_state = STATE_PLAYING
         self.async_write_ha_state()
 
@@ -163,9 +163,6 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_media_stop(self) -> None:
         self._manual_state = STATE_IDLE
         self.async_write_ha_state()
-
-    async def async_set_volume_level(self, volume: float) -> None:
-        pass
 
     async def async_media_seek(self, position: float) -> None:
         scene_id = self._scene.get("id")

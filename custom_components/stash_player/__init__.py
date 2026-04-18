@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
-import re
 from typing import Any
 
 from aiohttp import web
@@ -15,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ACTIVE_SCENE_QUERY,
@@ -29,8 +29,6 @@ from .const import (
     DOMAIN,
     LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
-    PLAYING_STATE_QUERY,
-    SCENE_BY_ID_QUERY,
     WEBHOOK_VIEW_KEY,
 )
 
@@ -42,13 +40,12 @@ class StashError(Exception):
 
 
 class StashClient:
-    """Simple async GraphQL client for Stash — based on Druidblack's implementation."""
+    """Simple async GraphQL client for Stash."""
 
     def __init__(self, graphql_url: str, session, api_key: str = "") -> None:
         self._url = graphql_url.rstrip("/")
         self._session = session
         self._api_key = api_key.strip()
-        # Derive base URL for constructing scene links
         self._base_url = self._url[:-len("/graphql")] if self._url.endswith("/graphql") else self._url
 
     @property
@@ -80,12 +77,8 @@ class StashClient:
                     raise StashError(f"HTTP {resp.status}")
                 return await resp.json()
 
-    # ── Connection test ────────────────────────────────────────────────────────
-
     async def validate(self) -> None:
         await self._post("query { version { version } }")
-
-    # ── Library stats ──────────────────────────────────────────────────────────
 
     async def get_scenes_count(self) -> int:
         data = await self._post("query { findScenes { count } }")
@@ -134,8 +127,6 @@ class StashClient:
         except (KeyError, TypeError):
             return None
 
-    # ── Playback mutations ─────────────────────────────────────────────────────
-
     async def generate_screenshot(self, scene_id: str) -> None:
         await self._post_allow_errors(
             f'mutation {{ sceneGenerateScreenshot(id: "{scene_id}") }}'
@@ -145,8 +136,6 @@ class StashClient:
         await self._post_allow_errors(
             f'mutation {{ sceneSaveActivity(id: "{scene_id}", resume_time: {position}) }}'
         )
-
-    # ── Admin mutations ────────────────────────────────────────────────────────
 
     async def metadata_scan(self) -> None:
         await self._post("mutation { metadataScan(input:{}) }")
@@ -255,7 +244,11 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
             is_streaming = any(s.get("_is_recent") for s in scenes)
         except Exception as err:
             raise UpdateFailed(f"Playback update failed: {err}") from err
-        return {"scenes": scenes, "is_streaming": is_streaming}
+
+        return {
+            "scenes": scenes,
+            "is_streaming": any(s.get("_is_recent") for s in scenes),
+        }
 
 
 class StashWebhookView(HomeAssistantView):
@@ -278,7 +271,6 @@ class StashWebhookView(HomeAssistantView):
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate config entry from version 1 (used stash_url key) to version 2 (url key)."""
     if entry.version < 2:
         new_data = dict(entry.data)
         if "stash_url" in new_data and CONF_URL not in new_data:
@@ -289,7 +281,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Stash Player from a config entry."""
     session = async_get_clientsession(hass)
     graphql_url: str = entry.data[CONF_URL]
     api_key: str = entry.data.get(CONF_API_KEY, "")
