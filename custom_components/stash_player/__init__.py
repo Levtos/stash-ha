@@ -29,6 +29,8 @@ from .const import (
     DOMAIN,
     LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
+    PLAYING_STATE_QUERY,
+    SCENE_BY_ID_QUERY,
     WEBHOOK_VIEW_KEY,
 )
 
