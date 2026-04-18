@@ -221,7 +221,7 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
                     try:
                         from homeassistant.util import dt as dt_util
                         lp = dt_util.parse_datetime(last_played)
-                        scene["_is_recent"] = (dt_util.utcnow() - lp).total_seconds() < 600
+                        scene["_is_recent"] = (dt_util.utcnow() - lp).total_seconds() < 180
                     except Exception:
                         scene["_is_recent"] = True
                 else:
