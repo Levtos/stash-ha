@@ -17,6 +17,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    ACTIVE_SCENE_QUERY,
     CLIENT_KEY,
     CONF_API_KEY,
     CONF_POLL_INTERVAL,
@@ -199,35 +200,59 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
         self.client = client
 
     async def _async_update_data(self) -> dict[str, Any]:
+        from homeassistant.util import dt as dt_util
         try:
-            # sceneStreams returns active stream URLs; crashes (nil ptr) when idle → handled by _post_allow_errors
+            base = self.client.stash_url
+
+            def _fix_paths(scene: dict) -> dict:
+                paths = scene.get("paths") or {}
+                if paths.get("screenshot"):
+                    paths["screenshot"] = (
+                        paths["screenshot"]
+                        .replace("http://localhost:9999", base)
+                        .replace("https://localhost:9999", base)
+                    )
+                    scene["paths"] = paths
+                return scene
+
+            # ── Try sceneStreams (exact current streams) ──────────────────────
             raw = await self.client._post_allow_errors(PLAYING_STATE_QUERY)
             streams = (raw.get("data") or {}).get("sceneStreams") or []
-            is_streaming = bool(streams)
+            _LOGGER.debug("sceneStreams response: %s", streams)
 
-            # Extract scene IDs from URLs like http://host:9999/scene/123/stream
             scene_ids: list[str] = []
             for stream in streams:
                 m = re.search(r"/scene/(\d+)/", stream.get("url", ""))
                 if m and m.group(1) not in scene_ids:
                     scene_ids.append(m.group(1))
 
-            base = self.client.stash_url
             scenes: list[dict] = []
             for sid in scene_ids[:2]:
                 data = await self.client._post(SCENE_BY_ID_QUERY, {"id": sid})
                 scene = (data.get("data") or {}).get("findScene")
                 if scene:
-                    paths = scene.get("paths") or {}
-                    if paths.get("screenshot"):
-                        paths["screenshot"] = (
-                            paths["screenshot"]
-                            .replace("http://localhost:9999", base)
-                            .replace("https://localhost:9999", base)
-                        )
-                        scene["paths"] = paths
+                    _fix_paths(scene)
                     scene["_is_recent"] = True
                     scenes.append(scene)
+
+            # ── Fallback: last_played_at within 5 minutes ─────────────────────
+            if not scenes:
+                raw2 = await self.client._post_allow_errors(ACTIVE_SCENE_QUERY)
+                scenes_raw = ((raw2.get("data") or {}).get("findScenes") or {}).get("scenes") or []
+                for scene in scenes_raw:
+                    last_played = scene.get("last_played_at")
+                    is_recent = False
+                    if last_played:
+                        try:
+                            lp = dt_util.parse_datetime(last_played)
+                            is_recent = (dt_util.utcnow() - lp).total_seconds() < 300
+                        except Exception:
+                            is_recent = True
+                    _fix_paths(scene)
+                    scene["_is_recent"] = is_recent
+                    scenes.append(scene)
+
+            is_streaming = any(s.get("_is_recent") for s in scenes)
         except Exception as err:
             raise UpdateFailed(f"Playback update failed: {err}") from err
         return {"scenes": scenes, "is_streaming": is_streaming}
