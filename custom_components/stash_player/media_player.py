@@ -120,7 +120,10 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         if not screenshot:
             return None
         api_key = self._entry.data.get(CONF_API_KEY, "")
-        return f"{screenshot}?apikey={api_key}" if api_key else screenshot
+        if not api_key:
+            return screenshot
+        sep = "&" if "?" in screenshot else "?"
+        return f"{screenshot}{sep}apikey={api_key}"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
