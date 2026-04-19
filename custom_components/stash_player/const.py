@@ -19,12 +19,21 @@ DEFAULT_USE_WEBHOOK = False
 DEFAULT_WEBHOOK_PORT = 8765
 DEFAULT_NSFW_MODE = "blur"
 
-# How long after the last_played_at timestamp we still treat a scene as
-# "streaming". Stash's sceneStreams query briefly returns empty between HLS
-# segments, so a small grace window prevents the media player from flickering
-# back to idle mid-playback. Kept short so that genuinely-stopped playback
-# transitions to idle quickly.
-RECENT_STREAM_GRACE_SECONDS = 45
+# Stash exposes no GraphQL query for "what is playing right now". The only
+# reliable signal is that the web player periodically calls sceneSaveActivity,
+# which advances last_played_at, resume_time, and eventually play_count. We
+# detect active playback by polling the most-recently-played scenes and
+# watching those three fields for changes across polls.
+#
+# STREAM_ACTIVITY_GRACE_SECONDS — how long after the last observed signal
+#   change we still consider the scene "streaming". Must be > the interval at
+#   which Stash's frontend calls sceneSaveActivity (typically 5-10s) plus the
+#   HA poll interval, so a single missed signal does not kick us to idle.
+#
+# FRESH_PLAY_THRESHOLD_SECONDS — on first observation of a scene (e.g. HA
+#   restart) treat it as streaming if last_played_at is younger than this.
+STREAM_ACTIVITY_GRACE_SECONDS = 60
+FRESH_PLAY_THRESHOLD_SECONDS = 30
 
 NSFW_BLUR = "blur"
 NSFW_HIDDEN = "hidden"
