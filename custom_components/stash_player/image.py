@@ -50,6 +50,8 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
         ImageEntity.__init__(self, hass)
         self._entry = entry
         self._index = index
+        self._last_screenshot_url: str | None = None
+        self._last_scene_id: str | None = None
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
         slot = index + 1
         self._attr_unique_id = f"{entry.entry_id}_cover_{slot}"
@@ -60,23 +62,44 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
             name=player_name,
             manufacturer="Stash",
         )
-        self._attr_image_last_updated: datetime | None = dt_util.utcnow()
+        self._attr_image_last_updated: datetime | None = None
+
+    @property
+    def _scene(self) -> dict:
+        scenes = (self.coordinator.data or {}).get("scenes", [])
+        return scenes[self._index] if self._index < len(scenes) else {}
+
+    @property
+    def _is_streaming(self) -> bool:
+        scene = self._scene
+        if not scene:
+            return False
+        if scene.get("_is_streaming"):
+            return True
+        sid = scene.get("id")
+        active = (self.coordinator.data or {}).get("active_scene_ids", set())
+        return bool(sid) and str(sid) in active
 
     @property
     def available(self) -> bool:
-        return True
+        return self.coordinator.last_update_success
 
     def _handle_coordinator_update(self) -> None:
-        self._attr_image_last_updated = dt_util.utcnow()
+        scene_id = self._scene.get("id") if self._scene else None
+        if scene_id != self._last_scene_id:
+            self._last_scene_id = scene_id
+            self._attr_image_last_updated = (
+                dt_util.utcnow() if self._is_streaming else None
+            )
+        elif not self._is_streaming:
+            self._attr_image_last_updated = None
         super()._handle_coordinator_update()
 
     async def async_image(self) -> bytes | None:
-        scenes = (self.coordinator.data or {}).get("scenes", [])
-        scene = scenes[self._index] if self._index < len(scenes) else {}
-
-        if not scene.get("_is_recent", False):
+        if not self._is_streaming:
             return None
 
+        scene = self._scene
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
         if not screenshot_url:
             return None
@@ -96,12 +119,13 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
             _LOGGER.warning("Stash cover fetch failed for %s: %s", screenshot_url, err)
             return None
 
+        self._last_screenshot_url = screenshot_url
+
         if nsfw_mode == NSFW_BLUR:
             try:
-                from PIL import Image
                 return await self._blur_image(data)
-            except ImportError:
-                pass
+            except Exception:  # noqa: BLE001
+                return data
         return data
 
     async def _blur_image(self, data: bytes) -> bytes:
@@ -110,7 +134,11 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
             img = Image.open(io.BytesIO(data))
             blurred = img.filter(ImageFilter.GaussianBlur(radius=30))
             out = io.BytesIO()
+            if img.mode in ("RGBA", "P"):
+                blurred = blurred.convert("RGB")
             blurred.save(out, format="JPEG", quality=85)
             return out.getvalue()
-        except Exception:
+        except ImportError:
+            return data
+        except Exception:  # noqa: BLE001
             return data
