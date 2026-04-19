@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
-import re
 from typing import Any
 
 from aiohttp import web
@@ -28,11 +27,10 @@ from .const import (
     DEFAULT_POLL_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    FRESH_PLAY_THRESHOLD_SECONDS,
     LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
-    PLAYING_STATE_QUERY,
-    RECENT_STREAM_GRACE_SECONDS,
-    SCENE_BY_ID_QUERY,
+    STREAM_ACTIVITY_GRACE_SECONDS,
     WEBHOOK_VIEW_KEY,
 )
 
@@ -185,27 +183,48 @@ class StashLibraryCoordinator(DataUpdateCoordinator):
 
 
 class StashPlaybackCoordinator(DataUpdateCoordinator):
-    """Polls active scene state every few seconds.
+    """Polls Stash for active playback.
+
+    Stash provides no first-class "currently streaming" query. The top-level
+    ``sceneStreams`` GraphQL field actually requires a scene id and returns
+    the *available* stream URLs for that scene, not a list of live sessions.
+
+    Empirically verified on Stash v0.31.1: ``last_played_at`` is written only
+    once at the start of a play session and does NOT advance. ``play_duration``
+    and ``resume_time`` however are advanced by the web player's
+    ``sceneSaveActivity`` mutation roughly every 10 seconds during playback
+    and stop advancing the moment the stream pauses or ends. This makes
+    ``play_duration`` the cleanest "is currently playing" signal: monotonically
+    increasing, and only while the player is actually pumping frames.
+
+    Detection rule per scene:
+      1. Primary — if ``play_duration`` has strictly increased since the last
+         poll, the scene is streaming *now*. Keep it marked as streaming for
+         ``STREAM_ACTIVITY_GRACE_SECONDS`` after the last observed increase
+         so that variable save intervals do not flap the state.
+      2. Fallback for first observation (e.g. HA restart mid-stream) — if we
+         have no prior signal for this scene but its ``last_played_at`` is
+         younger than ``FRESH_PLAY_THRESHOLD_SECONDS``, treat the scene as
+         streaming until the next poll provides a real delta.
 
     Data contract returned to entities:
         {
-            "scenes":              list of streaming scene dicts (0..2),
-            "active_scene_ids":    set[str] of ids confirmed by sceneStreams,
+            "scenes":              list[dict],    # up to 2, currently streaming
+            "active_scene_ids":    set[str],
             "is_streaming":        bool,
             "active_stream_count": int,
-            "last_played":         dict | None — most recent last_played scene
-                                   (independent of streaming state; used for sensors),
+            "last_played":         dict | None,   # most recent scene, any age
         }
 
-    Each scene dict includes:
-        _is_streaming: bool  — True if the id appears in sceneStreams
-        _last_played_at: str | None
+    Each scene dict in "scenes" has ``_is_streaming = True``.
     """
 
     def __init__(self, hass: HomeAssistant, client: StashClient, poll_interval: int) -> None:
         super().__init__(hass, _LOGGER, name=DOMAIN,
                          update_interval=timedelta(seconds=max(2, poll_interval)))
         self.client = client
+        # scene_id -> {"play_duration": float, "last_activity_ts": float}
+        self._scene_signals: dict[str, dict[str, Any]] = {}
 
     def _fix_paths(self, scene: dict) -> dict:
         base = self.client.stash_url
@@ -220,86 +239,111 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
             scene["paths"] = paths
         return scene
 
-    async def _fetch_scene(self, scene_id: str) -> dict | None:
-        data = await self.client._post(SCENE_BY_ID_QUERY, {"id": scene_id})
-        scene = (data.get("data") or {}).get("findScene")
-        return self._fix_paths(scene) if scene else None
+    def _prune_stale_signals(self, seen_ids: set[str], now_ts: float) -> None:
+        """Drop signal state for scenes we haven't seen in a while."""
+        cutoff = STREAM_ACTIVITY_GRACE_SECONDS * 2
+        stale = [
+            sid for sid, sig in self._scene_signals.items()
+            if sid not in seen_ids
+            and (now_ts - (sig.get("last_activity_ts") or 0)) > cutoff
+        ]
+        for sid in stale:
+            self._scene_signals.pop(sid, None)
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            # ── Authoritative: sceneStreams returns currently-active streams ──
-            raw = await self.client._post_allow_errors(PLAYING_STATE_QUERY)
-            streams = (raw.get("data") or {}).get("sceneStreams") or []
-            _LOGGER.debug("sceneStreams response: %s", streams)
-
-            streaming_ids: list[str] = []
-            for stream in streams:
-                m = re.search(r"/scenes?/(\d+)", stream.get("url", ""))
-                if m and m.group(1) not in streaming_ids:
-                    streaming_ids.append(m.group(1))
-            streaming_ids = streaming_ids[:2]
-
-            streaming_scenes: list[dict] = []
-            for sid in streaming_ids:
-                scene = await self._fetch_scene(sid)
-                if scene:
-                    scene["_is_streaming"] = True
-                    streaming_scenes.append(scene)
-
-            # ── last_played feed (for sensors + short grace-window fallback) ──
-            raw2 = await self.client._post_allow_errors(ACTIVE_SCENE_QUERY)
-            last_played_raw = (
-                ((raw2.get("data") or {}).get("findScenes") or {}).get("scenes") or []
+            raw = await self.client._post_allow_errors(ACTIVE_SCENE_QUERY)
+            scenes_raw = (
+                ((raw.get("data") or {}).get("findScenes") or {}).get("scenes") or []
             )
-            last_played_scene: dict | None = None
-            if last_played_raw:
-                last_played_scene = self._fix_paths(dict(last_played_raw[0]))
-
-            # Grace window: sceneStreams briefly returns empty between HLS
-            # segments. If the top last_played scene was touched in the last
-            # few seconds, treat it as still streaming to avoid flicker.
-            scenes: list[dict] = list(streaming_scenes)
-            active_scene_ids = set(streaming_ids)
-
-            if not scenes and last_played_scene:
-                lp_ts = last_played_scene.get("last_played_at")
-                if lp_ts:
-                    try:
-                        lp_dt = dt_util.parse_datetime(lp_ts)
-                        if lp_dt is not None:
-                            age = (dt_util.utcnow() - lp_dt).total_seconds()
-                            if 0 <= age < RECENT_STREAM_GRACE_SECONDS:
-                                grace_scene = dict(last_played_scene)
-                                grace_scene["_is_streaming"] = True
-                                scenes.append(grace_scene)
-                                sid = grace_scene.get("id")
-                                if sid:
-                                    active_scene_ids.add(str(sid))
-                    except Exception:  # noqa: BLE001
-                        pass
-
-            # Build compact last_played summary for sensors
-            last_played_summary: dict | None = None
-            if last_played_scene:
-                studio = last_played_scene.get("studio") or {}
-                performers = last_played_scene.get("performers") or []
-                last_played_summary = {
-                    "id": last_played_scene.get("id"),
-                    "title": last_played_scene.get("title"),
-                    "last_played_at": last_played_scene.get("last_played_at"),
-                    "studio": studio.get("name"),
-                    "performers": [
-                        p.get("name") for p in performers if p.get("name")
-                    ],
-                    "screenshot": (last_played_scene.get("paths") or {}).get(
-                        "screenshot"
-                    ),
-                }
         except Exception as err:
             raise UpdateFailed(f"Playback update failed: {err}") from err
 
+        now = dt_util.utcnow()
+        now_ts = now.timestamp()
+
+        streaming_scenes: list[dict] = []
+        active_scene_ids: set[str] = set()
+        seen_ids: set[str] = set()
+
+        for raw_scene in scenes_raw:
+            sid_val = raw_scene.get("id")
+            if sid_val is None:
+                continue
+            sid = str(sid_val)
+            seen_ids.add(sid)
+
+            scene = self._fix_paths(dict(raw_scene))
+            try:
+                play_duration = float(scene.get("play_duration") or 0)
+            except (TypeError, ValueError):
+                play_duration = 0.0
+
+            prev = self._scene_signals.get(sid)
+            delta_advanced = False
+            fresh_first_seen = False
+
+            if prev is None:
+                # First observation — fall back to last_played_at recency so
+                # we don't show idle for a couple of polls right after HA
+                # restarts mid-stream.
+                lpa = scene.get("last_played_at")
+                if lpa:
+                    lp_dt = dt_util.parse_datetime(lpa)
+                    if lp_dt is not None:
+                        age = (now - lp_dt).total_seconds()
+                        if 0 <= age < FRESH_PLAY_THRESHOLD_SECONDS:
+                            fresh_first_seen = True
+            else:
+                prev_duration = float(prev.get("play_duration") or 0)
+                if play_duration > prev_duration:
+                    delta_advanced = True
+
+            last_activity_ts = (prev or {}).get("last_activity_ts")
+            if delta_advanced or fresh_first_seen:
+                last_activity_ts = now_ts
+                _LOGGER.debug(
+                    "stash scene %s active: play_duration=%.1f (delta=%s fresh=%s)",
+                    sid, play_duration, delta_advanced, fresh_first_seen,
+                )
+
+            self._scene_signals[sid] = {
+                "play_duration": play_duration,
+                "last_activity_ts": last_activity_ts,
+            }
+
+            if (
+                last_activity_ts is not None
+                and (now_ts - last_activity_ts) < STREAM_ACTIVITY_GRACE_SECONDS
+            ):
+                scene["_is_streaming"] = True
+                streaming_scenes.append(scene)
+                active_scene_ids.add(sid)
+
+        self._prune_stale_signals(seen_ids, now_ts)
+
+        # Cap displayed slots at 2; the most recent activity wins naturally
+        # because ACTIVE_SCENE_QUERY already sorts by last_played_at DESC.
+        streaming_scenes = streaming_scenes[:2]
+        active_scene_ids = {str(s["id"]) for s in streaming_scenes if s.get("id")}
+
+        # last_played summary (always the most-recently-played scene, any age)
+        last_played_summary: dict | None = None
+        if scenes_raw:
+            top = self._fix_paths(dict(scenes_raw[0]))
+            studio = top.get("studio") or {}
+            performers = top.get("performers") or []
+            last_played_summary = {
+                "id": top.get("id"),
+                "title": top.get("title"),
+                "last_played_at": top.get("last_played_at"),
+                "studio": studio.get("name"),
+                "performers": [p.get("name") for p in performers if p.get("name")],
+                "screenshot": (top.get("paths") or {}).get("screenshot"),
+            }
+
         return {
-            "scenes": scenes,
+            "scenes": streaming_scenes,
             "is_streaming": bool(active_scene_ids),
             "active_scene_ids": active_scene_ids,
             "active_stream_count": len(active_scene_ids),
