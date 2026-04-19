@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import re
 from typing import Any
 
 from aiohttp import web
@@ -191,7 +192,6 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
         self.client = client
 
     async def _async_update_data(self) -> dict[str, Any]:
-        from homeassistant.util import dt as dt_util
         try:
             base = self.client.stash_url
 
@@ -213,7 +213,7 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
 
             scene_ids: list[str] = []
             for stream in streams:
-                m = re.search(r"/scene/(\d+)/", stream.get("url", ""))
+                m = re.search(r"/scenes?/(\d+)", stream.get("url", ""))
                 if m and m.group(1) not in scene_ids:
                     scene_ids.append(m.group(1))
 
@@ -244,13 +244,15 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
                     scene["_is_recent"] = is_recent
                     scenes.append(scene)
 
-            is_streaming = any(s.get("_is_recent") for s in scenes)
+            active_scene_ids = set(scene_ids)
+            is_streaming = bool(active_scene_ids)
         except Exception as err:
             raise UpdateFailed(f"Playback update failed: {err}") from err
 
         return {
             "scenes": scenes,
-            "is_streaming": any(s.get("_is_recent") for s in scenes),
+            "is_streaming": is_streaming,
+            "active_scene_ids": active_scene_ids,
         }
 
 
