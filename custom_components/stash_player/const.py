@@ -61,6 +61,7 @@ query ActiveScene {
       title
       rating100
       play_count
+      play_duration
       resume_time
       last_played_at
       paths {

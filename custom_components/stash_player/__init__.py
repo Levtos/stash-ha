@@ -189,17 +189,23 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
     ``sceneStreams`` GraphQL field actually requires a scene id and returns
     the *available* stream URLs for that scene, not a list of live sessions.
 
-    We therefore detect playback by watching the three fields that the web
-    player's ``sceneSaveActivity`` mutation advances during playback:
-        - ``last_played_at``  (timestamp; bumped when playDuration > 0)
-        - ``resume_time``     (playhead position)
-        - ``play_count``      (bumped once per qualifying play)
+    Empirically verified on Stash v0.31.1: ``last_played_at`` is written only
+    once at the start of a play session and does NOT advance. ``play_duration``
+    and ``resume_time`` however are advanced by the web player's
+    ``sceneSaveActivity`` mutation roughly every 10 seconds during playback
+    and stop advancing the moment the stream pauses or ends. This makes
+    ``play_duration`` the cleanest "is currently playing" signal: monotonically
+    increasing, and only while the player is actually pumping frames.
 
-    On each poll we fetch the N scenes with the most recent ``last_played_at``
-    and compare each of those three fields to the previous poll's values. Any
-    change → the scene is playing *right now*. We keep the scene marked as
-    streaming for ``STREAM_ACTIVITY_GRACE_SECONDS`` after the last observed
-    change so that slower save intervals do not flap the state.
+    Detection rule per scene:
+      1. Primary — if ``play_duration`` has strictly increased since the last
+         poll, the scene is streaming *now*. Keep it marked as streaming for
+         ``STREAM_ACTIVITY_GRACE_SECONDS`` after the last observed increase
+         so that variable save intervals do not flap the state.
+      2. Fallback for first observation (e.g. HA restart mid-stream) — if we
+         have no prior signal for this scene but its ``last_played_at`` is
+         younger than ``FRESH_PLAY_THRESHOLD_SECONDS``, treat the scene as
+         streaming until the next poll provides a real delta.
 
     Data contract returned to entities:
         {
@@ -217,8 +223,7 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
         super().__init__(hass, _LOGGER, name=DOMAIN,
                          update_interval=timedelta(seconds=max(2, poll_interval)))
         self.client = client
-        # scene_id -> {"last_played_at", "resume_time", "play_count",
-        #              "last_activity_ts"}
+        # scene_id -> {"play_duration": float, "last_activity_ts": float}
         self._scene_signals: dict[str, dict[str, Any]] = {}
 
     def _fix_paths(self, scene: dict) -> dict:
@@ -269,22 +274,20 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
             seen_ids.add(sid)
 
             scene = self._fix_paths(dict(raw_scene))
-            lpa = scene.get("last_played_at")
             try:
-                rt = float(scene.get("resume_time") or 0)
+                play_duration = float(scene.get("play_duration") or 0)
             except (TypeError, ValueError):
-                rt = 0.0
-            try:
-                pc = int(scene.get("play_count") or 0)
-            except (TypeError, ValueError):
-                pc = 0
+                play_duration = 0.0
 
             prev = self._scene_signals.get(sid)
-            had_change = False
+            delta_advanced = False
             fresh_first_seen = False
 
             if prev is None:
-                # First observation — check whether Stash was just played.
+                # First observation — fall back to last_played_at recency so
+                # we don't show idle for a couple of polls right after HA
+                # restarts mid-stream.
+                lpa = scene.get("last_played_at")
                 if lpa:
                     lp_dt = dt_util.parse_datetime(lpa)
                     if lp_dt is not None:
@@ -292,25 +295,20 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
                         if 0 <= age < FRESH_PLAY_THRESHOLD_SECONDS:
                             fresh_first_seen = True
             else:
-                if prev.get("last_played_at") != lpa:
-                    had_change = True
-                elif prev.get("resume_time") != rt:
-                    had_change = True
-                elif prev.get("play_count") != pc:
-                    had_change = True
+                prev_duration = float(prev.get("play_duration") or 0)
+                if play_duration > prev_duration:
+                    delta_advanced = True
 
             last_activity_ts = (prev or {}).get("last_activity_ts")
-            if had_change or fresh_first_seen:
+            if delta_advanced or fresh_first_seen:
                 last_activity_ts = now_ts
                 _LOGGER.debug(
-                    "stash scene %s activity: lpa=%s rt=%s pc=%s (change=%s fresh=%s)",
-                    sid, lpa, rt, pc, had_change, fresh_first_seen,
+                    "stash scene %s active: play_duration=%.1f (delta=%s fresh=%s)",
+                    sid, play_duration, delta_advanced, fresh_first_seen,
                 )
 
             self._scene_signals[sid] = {
-                "last_played_at": lpa,
-                "resume_time": rt,
-                "play_count": pc,
+                "play_duration": play_duration,
                 "last_activity_ts": last_activity_ts,
             }
 
@@ -327,8 +325,7 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
         # Cap displayed slots at 2; the most recent activity wins naturally
         # because ACTIVE_SCENE_QUERY already sorts by last_played_at DESC.
         streaming_scenes = streaming_scenes[:2]
-        active_scene_ids = {s["id"] for s in streaming_scenes if s.get("id")}
-        active_scene_ids = {str(x) for x in active_scene_ids}
+        active_scene_ids = {str(s["id"]) for s in streaming_scenes if s.get("id")}
 
         # last_played summary (always the most-recently-played scene, any age)
         last_played_summary: dict | None = None
