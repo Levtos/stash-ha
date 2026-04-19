@@ -58,6 +58,7 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._index = index
         self._position_updated_at: datetime | None = None
         self._manual_state: str | None = None
+        self._cover_entity_id: str | None = None
 
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
         slot = index + 1
@@ -86,7 +87,10 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             return STATE_IDLE
         if self._manual_state in (STATE_PAUSED, STATE_IDLE):
             return self._manual_state
-        if scene.get("_is_recent"):
+        active_scene_ids = (self.coordinator.data or {}).get("active_scene_ids", set())
+        if scene.get("id") in active_scene_ids:
+            return STATE_PLAYING
+        if self._manual_state == STATE_PLAYING:
             return STATE_PLAYING
         return STATE_IDLE
 
@@ -121,11 +125,19 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     def entity_picture(self) -> str | None:
         if not self._scene:
             return None
+        if not self._cover_entity_id:
+            slot = self._index + 1
+            unique_id = f"{self._entry.entry_id}_cover_{slot}"
+            registry = er.async_get(self.hass)
+            self._cover_entity_id = registry.async_get_entity_id("image", DOMAIN, unique_id)
+        return f"/api/image_proxy/{self._cover_entity_id}" if self._cover_entity_id else None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
         slot = self._index + 1
         unique_id = f"{self._entry.entry_id}_cover_{slot}"
         registry = er.async_get(self.hass)
-        entity_id = registry.async_get_entity_id("image", DOMAIN, unique_id)
-        return f"/api/image_proxy/{entity_id}" if entity_id else None
+        self._cover_entity_id = registry.async_get_entity_id("image", DOMAIN, unique_id)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
