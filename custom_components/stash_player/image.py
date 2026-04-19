@@ -52,6 +52,7 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
         self._index = index
         self._last_screenshot_url: str | None = None
         self._last_scene_id: str | None = None
+        self._last_streaming: bool = False
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
         slot = index + 1
         self._attr_unique_id = f"{entry.entry_id}_cover_{slot}"
@@ -86,22 +87,32 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
 
     def _handle_coordinator_update(self) -> None:
         scene_id = self._scene.get("id") if self._scene else None
-        if scene_id != self._last_scene_id:
+        is_streaming_now = self._is_streaming
+        # Bump the timestamp whenever the scene or streaming-state changes.
+        # image_last_updated drives HA's cache-busting token in entity_picture
+        # URLs, so the browser only refetches the cover on real transitions.
+        if (
+            scene_id != self._last_scene_id
+            or is_streaming_now != self._last_streaming
+        ):
             self._last_scene_id = scene_id
+            self._last_streaming = is_streaming_now
             self._attr_image_last_updated = (
-                dt_util.utcnow() if self._is_streaming else None
+                dt_util.utcnow() if is_streaming_now else None
             )
-        elif not self._is_streaming:
-            self._attr_image_last_updated = None
         super()._handle_coordinator_update()
 
     async def async_image(self) -> bytes | None:
         if not self._is_streaming:
+            _LOGGER.debug("stash cover %s: skip (not streaming)", self._attr_unique_id)
             return None
 
         scene = self._scene
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
         if not screenshot_url:
+            _LOGGER.debug(
+                "stash cover %s: no screenshot URL in scene", self._attr_unique_id
+            )
             return None
 
         nsfw_mode = self._entry.options.get(CONF_NSFW_MODE, DEFAULT_NSFW_MODE)
@@ -116,10 +127,16 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
                 resp.raise_for_status()
                 data = await resp.read()
         except Exception as err:
-            _LOGGER.warning("Stash cover fetch failed for %s: %s", screenshot_url, err)
+            _LOGGER.warning(
+                "Stash cover fetch failed for %s: %s", screenshot_url, err
+            )
             return None
 
         self._last_screenshot_url = screenshot_url
+        _LOGGER.debug(
+            "stash cover %s: fetched %d bytes from %s (nsfw=%s)",
+            self._attr_unique_id, len(data), screenshot_url, nsfw_mode,
+        )
 
         if nsfw_mode == NSFW_BLUR:
             try:

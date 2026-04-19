@@ -186,6 +186,15 @@ class StashMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         if not self._is_streaming:
             return None
         cover = self._resolve_cover_entity()
+        if cover and self.hass is not None:
+            cover_state = self.hass.states.get(cover)
+            if cover_state is not None:
+                pic = cover_state.attributes.get("entity_picture")
+                if pic:
+                    # The image entity's entity_picture already carries the
+                    # access-token query string HA uses to bust the browser
+                    # cache when the cover changes.
+                    return pic
         if cover:
             return f"/api/image_proxy/{cover}"
         # Last resort: serve Stash's own screenshot URL directly so the card
