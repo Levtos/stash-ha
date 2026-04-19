@@ -31,6 +31,7 @@ from .const import (
     LIBRARY_COORDINATOR_KEY,
     PLATFORMS,
     PLAYING_STATE_QUERY,
+    RECENT_STREAM_GRACE_SECONDS,
     SCENE_BY_ID_QUERY,
     WEBHOOK_VIEW_KEY,
 )
@@ -184,75 +185,125 @@ class StashLibraryCoordinator(DataUpdateCoordinator):
 
 
 class StashPlaybackCoordinator(DataUpdateCoordinator):
-    """Polls active scene state every few seconds."""
+    """Polls active scene state every few seconds.
+
+    Data contract returned to entities:
+        {
+            "scenes":              list of streaming scene dicts (0..2),
+            "active_scene_ids":    set[str] of ids confirmed by sceneStreams,
+            "is_streaming":        bool,
+            "active_stream_count": int,
+            "last_played":         dict | None — most recent last_played scene
+                                   (independent of streaming state; used for sensors),
+        }
+
+    Each scene dict includes:
+        _is_streaming: bool  — True if the id appears in sceneStreams
+        _last_played_at: str | None
+    """
 
     def __init__(self, hass: HomeAssistant, client: StashClient, poll_interval: int) -> None:
         super().__init__(hass, _LOGGER, name=DOMAIN,
                          update_interval=timedelta(seconds=max(2, poll_interval)))
         self.client = client
 
+    def _fix_paths(self, scene: dict) -> dict:
+        base = self.client.stash_url
+        paths = scene.get("paths") or {}
+        screenshot = paths.get("screenshot")
+        if screenshot:
+            paths["screenshot"] = (
+                screenshot
+                .replace("http://localhost:9999", base)
+                .replace("https://localhost:9999", base)
+            )
+            scene["paths"] = paths
+        return scene
+
+    async def _fetch_scene(self, scene_id: str) -> dict | None:
+        data = await self.client._post(SCENE_BY_ID_QUERY, {"id": scene_id})
+        scene = (data.get("data") or {}).get("findScene")
+        return self._fix_paths(scene) if scene else None
+
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            base = self.client.stash_url
-
-            def _fix_paths(scene: dict) -> dict:
-                paths = scene.get("paths") or {}
-                if paths.get("screenshot"):
-                    paths["screenshot"] = (
-                        paths["screenshot"]
-                        .replace("http://localhost:9999", base)
-                        .replace("https://localhost:9999", base)
-                    )
-                    scene["paths"] = paths
-                return scene
-
-            # ── Try sceneStreams (exact current streams) ──────────────────────
+            # ── Authoritative: sceneStreams returns currently-active streams ──
             raw = await self.client._post_allow_errors(PLAYING_STATE_QUERY)
             streams = (raw.get("data") or {}).get("sceneStreams") or []
             _LOGGER.debug("sceneStreams response: %s", streams)
 
-            scene_ids: list[str] = []
+            streaming_ids: list[str] = []
             for stream in streams:
                 m = re.search(r"/scenes?/(\d+)", stream.get("url", ""))
-                if m and m.group(1) not in scene_ids:
-                    scene_ids.append(m.group(1))
+                if m and m.group(1) not in streaming_ids:
+                    streaming_ids.append(m.group(1))
+            streaming_ids = streaming_ids[:2]
 
-            scenes: list[dict] = []
-            for sid in scene_ids[:2]:
-                data = await self.client._post(SCENE_BY_ID_QUERY, {"id": sid})
-                scene = (data.get("data") or {}).get("findScene")
+            streaming_scenes: list[dict] = []
+            for sid in streaming_ids:
+                scene = await self._fetch_scene(sid)
                 if scene:
-                    _fix_paths(scene)
-                    scene["_is_recent"] = True
-                    scenes.append(scene)
+                    scene["_is_streaming"] = True
+                    streaming_scenes.append(scene)
 
-            # ── Fallback: last_played_at within 5 minutes ─────────────────────
-            if not scenes:
-                raw2 = await self.client._post_allow_errors(ACTIVE_SCENE_QUERY)
-                scenes_raw = ((raw2.get("data") or {}).get("findScenes") or {}).get("scenes") or []
-                for scene in scenes_raw:
-                    last_played = scene.get("last_played_at")
-                    is_recent = False
-                    if last_played:
-                        try:
-                            lp = dt_util.parse_datetime(last_played)
-                            age = (dt_util.utcnow() - lp).total_seconds()
-                            is_recent = age < 7200
-                        except Exception:
-                            is_recent = True
-                    _fix_paths(scene)
-                    scene["_is_recent"] = is_recent
-                    scenes.append(scene)
+            # ── last_played feed (for sensors + short grace-window fallback) ──
+            raw2 = await self.client._post_allow_errors(ACTIVE_SCENE_QUERY)
+            last_played_raw = (
+                ((raw2.get("data") or {}).get("findScenes") or {}).get("scenes") or []
+            )
+            last_played_scene: dict | None = None
+            if last_played_raw:
+                last_played_scene = self._fix_paths(dict(last_played_raw[0]))
 
-            active_scene_ids = set(scene_ids)
-            is_streaming = bool(active_scene_ids)
+            # Grace window: sceneStreams briefly returns empty between HLS
+            # segments. If the top last_played scene was touched in the last
+            # few seconds, treat it as still streaming to avoid flicker.
+            scenes: list[dict] = list(streaming_scenes)
+            active_scene_ids = set(streaming_ids)
+
+            if not scenes and last_played_scene:
+                lp_ts = last_played_scene.get("last_played_at")
+                if lp_ts:
+                    try:
+                        lp_dt = dt_util.parse_datetime(lp_ts)
+                        if lp_dt is not None:
+                            age = (dt_util.utcnow() - lp_dt).total_seconds()
+                            if 0 <= age < RECENT_STREAM_GRACE_SECONDS:
+                                grace_scene = dict(last_played_scene)
+                                grace_scene["_is_streaming"] = True
+                                scenes.append(grace_scene)
+                                sid = grace_scene.get("id")
+                                if sid:
+                                    active_scene_ids.add(str(sid))
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            # Build compact last_played summary for sensors
+            last_played_summary: dict | None = None
+            if last_played_scene:
+                studio = last_played_scene.get("studio") or {}
+                performers = last_played_scene.get("performers") or []
+                last_played_summary = {
+                    "id": last_played_scene.get("id"),
+                    "title": last_played_scene.get("title"),
+                    "last_played_at": last_played_scene.get("last_played_at"),
+                    "studio": studio.get("name"),
+                    "performers": [
+                        p.get("name") for p in performers if p.get("name")
+                    ],
+                    "screenshot": (last_played_scene.get("paths") or {}).get(
+                        "screenshot"
+                    ),
+                }
         except Exception as err:
             raise UpdateFailed(f"Playback update failed: {err}") from err
 
         return {
             "scenes": scenes,
-            "is_streaming": is_streaming,
+            "is_streaming": bool(active_scene_ids),
             "active_scene_ids": active_scene_ids,
+            "active_stream_count": len(active_scene_ids),
+            "last_played": last_played_summary,
         }
 
 

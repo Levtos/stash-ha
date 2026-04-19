@@ -19,6 +19,13 @@ DEFAULT_USE_WEBHOOK = False
 DEFAULT_WEBHOOK_PORT = 8765
 DEFAULT_NSFW_MODE = "blur"
 
+# How long after the last_played_at timestamp we still treat a scene as
+# "streaming". Stash's sceneStreams query briefly returns empty between HLS
+# segments, so a small grace window prevents the media player from flickering
+# back to idle mid-playback. Kept short so that genuinely-stopped playback
+# transitions to idle quickly.
+RECENT_STREAM_GRACE_SECONDS = 45
+
 NSFW_BLUR = "blur"
 NSFW_HIDDEN = "hidden"
 NSFW_FULL = "full"
@@ -81,6 +88,7 @@ query SceneById($id: ID!) {
     rating100
     play_count
     resume_time
+    last_played_at
     paths {
       screenshot
     }
