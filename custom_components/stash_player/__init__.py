@@ -6,6 +6,7 @@ import asyncio
 from datetime import timedelta
 import logging
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -209,7 +210,7 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
 
     Data contract returned to entities:
         {
-            "scenes":              list[dict],    # up to 2, currently streaming
+            "scenes":              list[dict],    # all currently streaming
             "active_scene_ids":    set[str],
             "is_streaming":        bool,
             "active_stream_count": int,
@@ -226,16 +227,28 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
         # scene_id -> {"play_duration": float, "last_activity_ts": float}
         self._scene_signals: dict[str, dict[str, Any]] = {}
 
+    def _rewrite_url(self, url: str) -> str:
+        """Replace scheme/host/port of a Stash-returned URL with our base.
+
+        Stash often returns asset URLs with whatever hostname it sees itself
+        as (``localhost``, the Docker service name, an internal IP). Those
+        URLs are not reachable from Home Assistant, so we keep the path and
+        query but swap the authority for the URL the user actually configured.
+        """
+        base = urlsplit(self.client.stash_url)
+        target = urlsplit(url)
+        if not target.scheme and not target.netloc:
+            # Relative path — just prepend the base.
+            return f"{self.client.stash_url}{url if url.startswith('/') else '/' + url}"
+        return urlunsplit(
+            (base.scheme, base.netloc, target.path, target.query, target.fragment)
+        )
+
     def _fix_paths(self, scene: dict) -> dict:
-        base = self.client.stash_url
         paths = scene.get("paths") or {}
         screenshot = paths.get("screenshot")
         if screenshot:
-            paths["screenshot"] = (
-                screenshot
-                .replace("http://localhost:9999", base)
-                .replace("https://localhost:9999", base)
-            )
+            paths["screenshot"] = self._rewrite_url(screenshot)
             scene["paths"] = paths
         return scene
 
@@ -321,11 +334,6 @@ class StashPlaybackCoordinator(DataUpdateCoordinator):
                 active_scene_ids.add(sid)
 
         self._prune_stale_signals(seen_ids, now_ts)
-
-        # Cap displayed slots at 2; the most recent activity wins naturally
-        # because ACTIVE_SCENE_QUERY already sorts by last_played_at DESC.
-        streaming_scenes = streaming_scenes[:2]
-        active_scene_ids = {str(s["id"]) for s in streaming_scenes if s.get("id")}
 
         # last_played summary (always the most-recently-played scene, any age)
         last_played_summary: dict | None = None

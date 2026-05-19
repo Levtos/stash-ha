@@ -1,4 +1,4 @@
-"""Image entity for Stash scene cover art."""
+"""Image entity for the currently-streaming Stash scene's cover."""
 
 from __future__ import annotations
 
@@ -36,27 +36,22 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id][COORDINATOR_KEY]
-    async_add_entities([
-        StashCoverImage(entry, coordinator, 0, hass),
-        StashCoverImage(entry, coordinator, 1, hass),
-    ])
+    async_add_entities([StashCoverImage(entry, coordinator, hass)])
 
 
 class StashCoverImage(CoordinatorEntity, ImageEntity):
-    """Screenshot image for a Stash playback slot."""
+    """Cover of the most-recently-active Stash stream."""
 
-    def __init__(self, entry: ConfigEntry, coordinator, index: int, hass: HomeAssistant) -> None:
+    def __init__(self, entry: ConfigEntry, coordinator, hass: HomeAssistant) -> None:
         CoordinatorEntity.__init__(self, coordinator)
         ImageEntity.__init__(self, hass)
         self._entry = entry
-        self._index = index
         self._last_screenshot_url: str | None = None
         self._last_scene_id: str | None = None
         self._last_streaming: bool = False
         player_name = entry.options.get(CONF_PLAYER_NAME, DEFAULT_PLAYER_NAME)
-        slot = index + 1
-        self._attr_unique_id = f"{entry.entry_id}_cover_{slot}"
-        self._attr_name = f"{player_name} Cover {slot}"
+        self._attr_unique_id = f"{entry.entry_id}_cover"
+        self._attr_name = f"{player_name} Cover"
         self._attr_content_type = "image/jpeg"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
@@ -67,19 +62,12 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
 
     @property
     def _scene(self) -> dict:
-        scenes = (self.coordinator.data or {}).get("scenes", [])
-        return scenes[self._index] if self._index < len(scenes) else {}
+        scenes = (self.coordinator.data or {}).get("scenes") or []
+        return scenes[0] if scenes else {}
 
     @property
     def _is_streaming(self) -> bool:
-        scene = self._scene
-        if not scene:
-            return False
-        if scene.get("_is_streaming"):
-            return True
-        sid = scene.get("id")
-        active = (self.coordinator.data or {}).get("active_scene_ids", set())
-        return bool(sid) and str(sid) in active
+        return bool((self.coordinator.data or {}).get("scenes"))
 
     @property
     def available(self) -> bool:
@@ -88,9 +76,6 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
     def _handle_coordinator_update(self) -> None:
         scene_id = self._scene.get("id") if self._scene else None
         is_streaming_now = self._is_streaming
-        # Bump the timestamp whenever the scene or streaming-state changes.
-        # image_last_updated drives HA's cache-busting token in entity_picture
-        # URLs, so the browser only refetches the cover on real transitions.
         if (
             scene_id != self._last_scene_id
             or is_streaming_now != self._last_streaming
@@ -104,15 +89,11 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
 
     async def async_image(self) -> bytes | None:
         if not self._is_streaming:
-            _LOGGER.debug("stash cover %s: skip (not streaming)", self._attr_unique_id)
             return None
 
         scene = self._scene
         screenshot_url = (scene.get("paths") or {}).get("screenshot")
         if not screenshot_url:
-            _LOGGER.debug(
-                "stash cover %s: no screenshot URL in scene", self._attr_unique_id
-            )
             return None
 
         nsfw_mode = self._entry.options.get(CONF_NSFW_MODE, DEFAULT_NSFW_MODE)
@@ -133,10 +114,6 @@ class StashCoverImage(CoordinatorEntity, ImageEntity):
             return None
 
         self._last_screenshot_url = screenshot_url
-        _LOGGER.debug(
-            "stash cover %s: fetched %d bytes from %s (nsfw=%s)",
-            self._attr_unique_id, len(data), screenshot_url, nsfw_mode,
-        )
 
         if nsfw_mode == NSFW_BLUR:
             try:
