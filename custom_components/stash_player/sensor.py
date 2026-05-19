@@ -42,6 +42,7 @@ async def async_setup_entry(
         StashMarkersSensor(library, entry),
         StashVersionSensor(library, entry),
         StashActiveStreamCountSensor(playback, entry),
+        StashCurrentlyPlayingSensor(playback, entry),
         StashLastPlayedTitleSensor(playback, entry),
         StashLastPlayedAtSensor(playback, entry),
     ])
@@ -208,6 +209,37 @@ class StashActiveStreamCountSensor(_BasePlaybackSensor):
     @property
     def native_value(self) -> int:
         return int((self.coordinator.data or {}).get("active_stream_count", 0) or 0)
+
+
+class StashCurrentlyPlayingSensor(_BasePlaybackSensor):
+    """Titles of all currently streaming scenes.
+
+    Stash exposes no per-session metadata, so we cannot tell *which monitor*
+    plays *which scene*. We just list every scene whose play_duration was
+    advancing within the activity window. State is the joined title list (or
+    None when nothing streams); the raw list and scene ids live in attributes.
+    """
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_currently_playing"
+        self._attr_name = "Currently Playing"
+        self._attr_icon = "mdi:play-box-multiple"
+
+    @property
+    def native_value(self) -> str | None:
+        scenes = (self.coordinator.data or {}).get("scenes") or []
+        titles = [s.get("title") for s in scenes if s.get("title")]
+        return " | ".join(titles) if titles else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        scenes = (self.coordinator.data or {}).get("scenes") or []
+        return {
+            "titles": [s.get("title") for s in scenes if s.get("title")],
+            "scene_ids": [str(s.get("id")) for s in scenes if s.get("id")],
+            "count": len(scenes),
+        }
 
 
 class StashLastPlayedTitleSensor(_BasePlaybackSensor):

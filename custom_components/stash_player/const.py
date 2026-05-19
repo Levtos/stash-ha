@@ -32,8 +32,13 @@ DEFAULT_NSFW_MODE = "blur"
 #
 # FRESH_PLAY_THRESHOLD_SECONDS — on first observation of a scene (e.g. HA
 #   restart) treat it as streaming if last_played_at is younger than this.
+#
+# ACTIVE_SCENE_WINDOW — how many recently-played scenes we sample on each
+#   poll. Needs to be high enough that a scene which has been streaming for
+#   a while does not fall out of the window when newer scenes get touched.
 STREAM_ACTIVITY_GRACE_SECONDS = 60
 FRESH_PLAY_THRESHOLD_SECONDS = 30
+ACTIVE_SCENE_WINDOW = 10
 
 NSFW_BLUR = "blur"
 NSFW_HIDDEN = "hidden"
@@ -54,7 +59,7 @@ query ActiveScene {
     scene_filter: {
       last_played_at: { modifier: NOT_NULL, value: "" }
     }
-    filter: { per_page: 2, sort: "last_played_at", direction: DESC }
+    filter: { per_page: 10, sort: "last_played_at", direction: DESC }
   ) {
     scenes {
       id
