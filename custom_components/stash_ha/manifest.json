@@ -1,7 +1,7 @@
 {
   "domain": "stash_ha",
   "name": "Stash HA",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "documentation": "https://github.com/Levtos/stash-ha",
   "issue_tracker": "https://github.com/Levtos/stash-ha/issues",
   "codeowners": ["@Levtos"],
