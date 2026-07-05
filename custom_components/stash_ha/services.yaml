@@ -1,0 +1,49 @@
+metadata_scan:
+  name: Metadata scan
+  description: Start a Stash metadata scan on all configured Stash servers.
+
+metadata_clean:
+  name: Metadata clean
+  description: Start Stash metadata cleanup on all configured Stash servers.
+
+metadata_generate:
+  name: Metadata generate
+  description: Generate Stash metadata on all configured Stash servers.
+
+metadata_auto_tag:
+  name: Metadata auto tag
+  description: Auto-tag metadata on all configured Stash servers.
+
+metadata_identify:
+  name: Metadata identify
+  description: Run metadata identification on all configured Stash servers.
+
+generate_screenshot:
+  name: Generate screenshot
+  description: Generate a screenshot for a Stash scene and refresh playback state.
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Stash scene ID.
+      required: true
+      selector:
+        text:
+
+save_activity:
+  name: Save activity
+  description: Save playback activity for a Stash scene and refresh playback state.
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Stash scene ID.
+      required: true
+      selector:
+        text:
+    position:
+      name: Position
+      description: Playback position in seconds.
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box

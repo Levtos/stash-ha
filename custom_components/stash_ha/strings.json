@@ -1,0 +1,48 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Stash HA",
+        "data": {
+          "url": "Stash URL",
+          "api_key": "API key",
+          "player_name": "Player name",
+          "poll_interval": "Poll interval",
+          "use_webhook": "Use webhook",
+          "nsfw_mode": "NSFW mode"
+        }
+      },
+      "module_step": {
+        "title": "Stash HA",
+        "data": {
+          "url": "Stash URL",
+          "api_key": "API key",
+          "player_name": "Player name",
+          "poll_interval": "Poll interval",
+          "use_webhook": "Use webhook",
+          "nsfw_mode": "NSFW mode"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to Stash.",
+      "invalid_url": "Invalid URL."
+    },
+    "abort": {
+      "already_configured": "This Stash server is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Stash HA options",
+        "data": {
+          "player_name": "Player name",
+          "poll_interval": "Poll interval",
+          "use_webhook": "Use webhook",
+          "nsfw_mode": "NSFW mode"
+        }
+      }
+    }
+  }
+}
