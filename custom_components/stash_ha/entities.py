@@ -56,6 +56,7 @@ from .coordinator import (
     StashPlaybackCoordinator,
     runtime_from_hass,
 )
+from .playback_logic import current_playing_title
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -177,9 +178,12 @@ class _CurrentlyPlayingSensor(CoordinatorEntity[StashPlaybackCoordinator], Senso
 
     @property
     def native_value(self) -> str | None:
+        # Multiple active scenes are separate titles — never join them into a
+        # combined "A | B" state (that would make Title Classifier store a bogus
+        # A|B catalog entry). The most-recently-active title only; the separate
+        # titles stay in extra_state_attributes below.
         scenes = (self.coordinator.data or {}).get("scenes") or []
-        titles = [s.get("title") for s in scenes if s.get("title")]
-        return " | ".join(titles) if titles else None
+        return current_playing_title(scenes)
 
     @property
     def extra_state_attributes(self) -> dict:

@@ -119,6 +119,18 @@ def prune_stale_signals(
         signals.pop(sid, None)
 
 
+def current_playing_title(scenes: list[dict[str, Any]] | None) -> str | None:
+    """State for the Currently Playing sensor: the most-recently-active scene's
+    title. ``scenes`` are ordered last_played_at DESC, so ``scenes[0]`` is the
+    most recent. Multiple active scenes are NEVER joined into a combined
+    "A | B" state — the separate titles stay in the sensor's attributes.
+    Returns None when nothing is streaming (or the top scene has no title).
+    """
+    if not scenes:
+        return None
+    return scenes[0].get("title")
+
+
 def summarise_last_played(top_scene: dict[str, Any]) -> dict[str, Any]:
     """Build the `last_played` summary used by sensors."""
     studio = top_scene.get("studio") or {}

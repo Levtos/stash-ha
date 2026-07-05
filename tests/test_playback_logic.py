@@ -161,3 +161,30 @@ def test_summarise_handles_missing_pieces_gracefully():
     assert out["studio"] is None
     assert out["performers"] == []
     assert out["screenshot"] is None
+
+
+# --------------------------------------------------------- current_playing_title
+# Regression: the Currently Playing sensor state must NOT combine multiple active
+# scene titles into "A | B" (that would create a bogus A|B Title Classifier
+# catalog entry). It returns the most-recently-active single title.
+
+
+def test_current_playing_title_single_scene():
+    assert P.current_playing_title([{"id": "1", "title": "Title A"}]) == "Title A"
+
+
+def test_current_playing_title_two_scenes_no_join():
+    # scenes are last_played_at DESC → scenes[0] ("Title A") is most recent.
+    scenes = [
+        {"id": "1", "title": "Title A"},
+        {"id": "2", "title": "Title B"},
+    ]
+    state = P.current_playing_title(scenes)
+    assert " | " not in state          # never a combined A|B state
+    assert state == "Title A"          # exactly the most-recent scene's title
+
+
+def test_current_playing_title_empty_or_untitled_is_none():
+    assert P.current_playing_title([]) is None
+    assert P.current_playing_title(None) is None
+    assert P.current_playing_title([{"id": "1", "title": None}]) is None
