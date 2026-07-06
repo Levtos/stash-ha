@@ -188,3 +188,86 @@ def test_current_playing_title_empty_or_untitled_is_none():
     assert P.current_playing_title([]) is None
     assert P.current_playing_title(None) is None
     assert P.current_playing_title([{"id": "1", "title": None}]) is None
+
+
+# --------------------------------------------------------- assign_slots
+# Sticky scene_id -> slot mapping for the fixed slot title sensors.
+
+
+def _scene(sid, title=None):
+    return {"id": sid, "title": title or f"T{sid}"}
+
+
+def test_assign_slots_single_scene_takes_slot_1():
+    assert P.assign_slots([_scene("a")], {}, 4) == {"a": 1}
+
+
+def test_assign_slots_two_scenes_separate_slots():
+    scenes = [_scene("a"), _scene("b")]
+    assert P.assign_slots(scenes, {}, 4) == {"a": 1, "b": 2}
+
+
+def test_assign_slots_reorder_keeps_sticky_slots():
+    prev = {"a": 1, "b": 2}
+    # scenes come back in the opposite order (last_played_at re-sorted).
+    reordered = [_scene("b"), _scene("a")]
+    assert P.assign_slots(reordered, prev, 4) == {"a": 1, "b": 2}
+
+
+def test_assign_slots_stopped_scene_frees_its_slot():
+    prev = {"a": 1, "b": 2}
+    # 'a' stopped; 'b' keeps slot 2 (not shifted down to slot 1).
+    assert P.assign_slots([_scene("b")], prev, 4) == {"b": 2}
+
+
+def test_assign_slots_new_scene_takes_lowest_free_slot():
+    prev = {"b": 2}  # slot 1 is free
+    result = P.assign_slots([_scene("b"), _scene("c")], prev, 4)
+    assert result == {"b": 2, "c": 1}
+
+
+def test_assign_slots_overflow_only_fills_available_slots():
+    scenes = [_scene(x) for x in ("a", "b", "c", "d", "e")]  # 5 > 4
+    result = P.assign_slots(scenes, {}, 4)
+    assert len(result) == 4
+    assert set(result.values()) == {1, 2, 3, 4}
+    # exactly one scene got no slot (the 5th in order)
+    assert sum(1 for s in scenes if str(s["id"]) not in result) == 1
+
+
+def test_assign_slots_skips_scenes_without_id():
+    scenes = [{"title": "no id"}, _scene("a")]
+    assert P.assign_slots(scenes, {}, 4) == {"a": 1}
+
+
+def test_assign_slots_does_not_mutate_prev_mapping():
+    prev = {"a": 1}
+    P.assign_slots([_scene("a"), _scene("b")], prev, 4)
+    assert prev == {"a": 1}
+
+
+# --------------------------------------------------------- slots_view
+
+
+def test_slots_view_empty_slots_are_none_not_idle():
+    view = P.slots_view([_scene("a")], {"a": 1}, 4)
+    assert view[1]["title"] == "Ta"
+    # Empty slots must be None so the sensor reports no title (no "idle" string).
+    assert view[2] is None
+    assert view[3] is None
+    assert view[4] is None
+
+
+def test_slots_view_two_occupied_slots():
+    scenes = [_scene("a", "Alpha"), _scene("b", "Beta")]
+    view = P.slots_view(scenes, {"a": 1, "b": 2}, 4)
+    assert view[1]["title"] == "Alpha"
+    assert view[2]["title"] == "Beta"
+    assert view[3] is None and view[4] is None
+
+
+def test_slots_view_stale_mapping_entry_resolves_to_none():
+    # mapping points at a scene that is no longer active -> slot is None.
+    view = P.slots_view([_scene("a")], {"a": 1, "gone": 2}, 4)
+    assert view[1]["title"] == "Ta"
+    assert view[2] is None

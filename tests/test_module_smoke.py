@@ -320,6 +320,17 @@ def test_entities_expose_all_15_unique_id_suffixes():
     assert suffixes == expected, suffixes
 
 
+def test_entities_wire_fixed_slot_title_sensors():
+    """The four fixed slot title sensors are registered via uid_slot_title()."""
+    src = (MODULE_DIR / "entities.py").read_text(encoding="utf-8")
+    assert "_SlotTitleSensor" in src
+    assert "uid_slot_title" in src
+    assert "SLOT_COUNT" in src
+    # const.py ships exactly four slots and a stable suffix builder.
+    assert sh_const.SLOT_COUNT == 4
+    assert sh_const.uid_slot_title(2) == "slot_2_title"
+
+
 # =========================================================================
 # 2) Webhook URL contract.
 # =========================================================================

@@ -34,6 +34,7 @@ from .const import (
     MODULE_ID,
     NSFW_BLUR,
     NSFW_HIDDEN,
+    SLOT_COUNT,
     UID_ACTIVE_STREAMS,
     UID_COVER,
     UID_CURRENTLY_PLAYING,
@@ -49,6 +50,7 @@ from .const import (
     UID_STUDIOS,
     UID_TAGS,
     UID_VERSION,
+    uid_slot_title,
     unique_id,
 )
 from .coordinator import (
@@ -96,6 +98,10 @@ async def async_get_entities(
             _CurrentlyPlayingSensor(playback, entry),
             _LastPlayedTitleSensor(playback, entry),
             _LastPlayedAtSensor(playback, entry),
+            *(
+                _SlotTitleSensor(playback, entry, n)
+                for n in range(1, SLOT_COUNT + 1)
+            ),
         ]
     if platform == Platform.IMAGE:
         return [_CoverImage(playback, entry, hass)]
@@ -192,6 +198,63 @@ class _CurrentlyPlayingSensor(CoordinatorEntity[StashPlaybackCoordinator], Senso
             "titles": [s.get("title") for s in scenes if s.get("title")],
             "scene_ids": [str(s.get("id")) for s in scenes if s.get("id")],
             "count": len(scenes),
+        }
+
+
+class _SlotTitleSensor(CoordinatorEntity[StashPlaybackCoordinator], SensorEntity):
+    """Fixed slot sensor: the title of the scene stuck to this slot, or None.
+
+    One observable state per active scene so the Title Classifier can watch each
+    active stream as a separate source. Empty slots report None — never an
+    "idle" string — so no bogus catalog entry is created. Slot assignment is
+    sticky (see playback_logic.assign_slots): a scene keeps its slot until it
+    stops, so the state does not flap when the scene order changes.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:play-box-outline"
+
+    def __init__(
+        self,
+        coordinator: StashPlaybackCoordinator,
+        entry: ConfigEntry,
+        slot: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self._slot = slot
+        self._attr_unique_id = unique_id(
+            MODULE_ID, entry.entry_id, uid_slot_title(slot)
+        )
+        self._attr_name = f"Slot {slot} Title"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def _scene(self) -> dict[str, Any] | None:
+        slots = (self.coordinator.data or {}).get("slots") or {}
+        return slots.get(self._slot)
+
+    @property
+    def native_value(self) -> str | None:
+        scene = self._scene
+        return scene.get("title") if scene else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        scene = self._scene
+        if not scene:
+            return {"slot": self._slot, "scene_id": None}
+        studio = scene.get("studio") or {}
+        performers = scene.get("performers") or []
+        scene_id = scene.get("id")
+        return {
+            "slot": self._slot,
+            "scene_id": str(scene_id) if scene_id is not None else None,
+            "title": scene.get("title"),
+            "cover_url": (scene.get("paths") or {}).get("screenshot"),
+            "studio": studio.get("name"),
+            "performers": [p.get("name") for p in performers if p.get("name")],
+            "last_played_at": scene.get("last_played_at"),
+            "resume_time": scene.get("resume_time"),
         }
 
 

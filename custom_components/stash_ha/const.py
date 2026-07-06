@@ -32,6 +32,10 @@ STREAM_ACTIVITY_GRACE_SECONDS = 60
 FRESH_PLAY_THRESHOLD_SECONDS = 30
 ACTIVE_SCENE_WINDOW = 10
 
+# Fixed number of slot title sensors — one observable state per active scene so
+# the Title Classifier can watch each active stream as a separate source.
+SLOT_COUNT = 4
+
 NSFW_BLUR = "blur"
 NSFW_HIDDEN = "hidden"
 NSFW_FULL = "full"
@@ -62,6 +66,11 @@ UID_ACTIVE_STREAMS = "active_streams"
 UID_CURRENTLY_PLAYING = "currently_playing"
 UID_LAST_PLAYED_TITLE = "last_played_title"
 UID_LAST_PLAYED_AT = "last_played_at"
+
+
+def uid_slot_title(slot: int) -> str:
+    """Unique-id suffix for the slot-N title sensor (stable across polls)."""
+    return f"slot_{slot}_title"
 # Image + media_player
 UID_COVER = "cover"
 UID_PLAYER = "player"

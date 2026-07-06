@@ -17,12 +17,15 @@ from .const import (
     DEFAULT_LIBRARY_SCAN_INTERVAL,
     DOMAIN,
     MODULE_ID,
+    SLOT_COUNT,
 )
 from .playback_logic import (
+    assign_slots,
     evaluate_scene_signal,
     parse_play_duration,
     prune_stale_signals,
     rewrite_url,
+    slots_view,
     summarise_last_played,
 )
 
@@ -80,6 +83,8 @@ class StashPlaybackCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         # scene_id -> {"play_duration": float, "last_activity_ts": float}
         self._scene_signals: dict[str, dict[str, Any]] = {}
+        # scene_id -> slot number (1..SLOT_COUNT); sticky across polls.
+        self._slot_map: dict[str, int] = {}
 
     def _fix_paths(self, scene: dict) -> dict:
         paths = scene.get("paths") or {}
@@ -140,6 +145,10 @@ class StashPlaybackCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         prune_stale_signals(self._scene_signals, seen_ids, now_ts)
 
+        # Sticky scene_id -> slot assignment for the fixed slot title sensors.
+        self._slot_map = assign_slots(streaming_scenes, self._slot_map, SLOT_COUNT)
+        slots = slots_view(streaming_scenes, self._slot_map, SLOT_COUNT)
+
         last_played_summary: dict | None = None
         if scenes_raw:
             top = self._fix_paths(dict(scenes_raw[0]))
@@ -150,6 +159,8 @@ class StashPlaybackCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "is_streaming": bool(active_scene_ids),
             "active_scene_ids": active_scene_ids,
             "active_stream_count": len(active_scene_ids),
+            "slots": slots,
+            "slot_overflow": max(0, len(active_scene_ids) - SLOT_COUNT),
             "last_played": last_played_summary,
         }
 

@@ -119,6 +119,82 @@ def prune_stale_signals(
         signals.pop(sid, None)
 
 
+def assign_slots(
+    scenes: list[dict[str, Any]] | None,
+    prev_mapping: dict[str, int] | None,
+    slot_count: int = 4,
+) -> dict[str, int]:
+    """Sticky scene_id -> slot assignment for the fixed slot title sensors.
+
+    Slots are 1-based (1..slot_count). Rules:
+      * A still-active scene keeps the slot it already held (order changes of
+        ``scenes`` never move an existing assignment — no flapping).
+      * Scenes that are no longer active are dropped from the mapping.
+      * New scenes take the lowest free slot, in ``scenes`` order (which is
+        last_played_at DESC, so the most recent new scene gets the lowest slot).
+      * When more scenes are active than there are slots, the overflow scenes
+        simply get no slot (never crash, never a dynamic entity).
+      * Scenes without an ``id`` are skipped (cannot be tracked stably).
+
+    Returns a fresh mapping; ``prev_mapping`` is not mutated.
+    """
+    active_ids: list[str] = []
+    seen: set[str] = set()
+    for scene in scenes or []:
+        sid_val = scene.get("id")
+        if sid_val is None:
+            continue
+        sid = str(sid_val)
+        if sid in seen:
+            continue
+        seen.add(sid)
+        active_ids.append(sid)
+
+    # 1. Keep valid existing assignments for scenes that are still active.
+    new_mapping: dict[str, int] = {}
+    used_slots: set[int] = set()
+    for sid, slot in (prev_mapping or {}).items():
+        if sid in seen and 1 <= slot <= slot_count and slot not in used_slots:
+            new_mapping[sid] = slot
+            used_slots.add(slot)
+
+    # 2. Assign new scenes to the lowest free slot, in active order.
+    free_slots = [n for n in range(1, slot_count + 1) if n not in used_slots]
+    fi = 0
+    for sid in active_ids:
+        if sid in new_mapping:
+            continue
+        if fi >= len(free_slots):
+            break  # overflow — no free slot, scene gets none
+        new_mapping[sid] = free_slots[fi]
+        fi += 1
+
+    return new_mapping
+
+
+def slots_view(
+    scenes: list[dict[str, Any]] | None,
+    mapping: dict[str, int] | None,
+    slot_count: int = 4,
+) -> dict[int, dict[str, Any] | None]:
+    """Resolve a scene_id -> slot ``mapping`` into a {slot: scene | None} view.
+
+    Every slot 1..slot_count is present; unoccupied slots map to None (so the
+    slot sensor reports no title, never an "idle" string). A mapped scene_id
+    that is not in ``scenes`` also resolves to None.
+    """
+    scenes_by_id = {
+        str(s.get("id")): s for s in scenes or [] if s.get("id") is not None
+    }
+    view: dict[int, dict[str, Any] | None] = {
+        n: None for n in range(1, slot_count + 1)
+    }
+    for sid, slot in (mapping or {}).items():
+        if 1 <= slot <= slot_count:
+            view[slot] = scenes_by_id.get(sid)
+    return view
+
+
 def current_playing_title(scenes: list[dict[str, Any]] | None) -> str | None:
     """State for the Currently Playing sensor: the most-recently-active scene's
     title. ``scenes`` are ordered last_played_at DESC, so ``scenes[0]`` is the
