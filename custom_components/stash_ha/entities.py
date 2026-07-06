@@ -35,6 +35,7 @@ from .const import (
     NSFW_BLUR,
     NSFW_HIDDEN,
     SLOT_COUNT,
+    SLOT_EMPTY_TITLE,
     UID_ACTIVE_STREAMS,
     UID_COVER,
     UID_CURRENTLY_PLAYING,
@@ -50,6 +51,12 @@ from .const import (
     UID_STUDIOS,
     UID_TAGS,
     UID_VERSION,
+    uid_slot_cover,
+    uid_slot_display_text,
+    uid_slot_media_player,
+    uid_slot_performers,
+    uid_slot_studio,
+    uid_slot_tags,
     uid_slot_title,
     unique_id,
 )
@@ -58,7 +65,15 @@ from .coordinator import (
     StashPlaybackCoordinator,
     runtime_from_hass,
 )
-from .playback_logic import current_playing_title
+from .playback_logic import (
+    current_playing_title,
+    slot_cover_url,
+    slot_display_text,
+    slot_performers,
+    slot_studio,
+    slot_tags,
+    slot_title,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -102,11 +117,28 @@ async def async_get_entities(
                 _SlotTitleSensor(playback, entry, n)
                 for n in range(1, SLOT_COUNT + 1)
             ),
+            *(
+                _SlotMetaSensor(playback, entry, n, kind)
+                for n in range(1, SLOT_COUNT + 1)
+                for kind in _SLOT_META
+            ),
         ]
     if platform == Platform.IMAGE:
-        return [_CoverImage(playback, entry, hass)]
+        return [
+            _CoverImage(playback, entry, hass),
+            *(
+                _SlotCoverImage(playback, entry, hass, n)
+                for n in range(1, SLOT_COUNT + 1)
+            ),
+        ]
     if platform == Platform.MEDIA_PLAYER:
-        return [_MediaPlayer(playback, entry, client)]
+        return [
+            _MediaPlayer(playback, entry, client),
+            *(
+                _SlotMediaPlayer(playback, entry, client, n)
+                for n in range(1, SLOT_COUNT + 1)
+            ),
+        ]
     return []
 
 
@@ -234,9 +266,10 @@ class _SlotTitleSensor(CoordinatorEntity[StashPlaybackCoordinator], SensorEntity
         return slots.get(self._slot)
 
     @property
-    def native_value(self) -> str | None:
-        scene = self._scene
-        return scene.get("title") if scene else None
+    def native_value(self) -> str:
+        # Empty slot ⇒ the fixed placeholder (meant for the TC ignore list),
+        # never None/"Unbekannt".
+        return slot_title(self._scene, SLOT_EMPTY_TITLE)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -245,6 +278,7 @@ class _SlotTitleSensor(CoordinatorEntity[StashPlaybackCoordinator], SensorEntity
             return {"slot": self._slot, "scene_id": None}
         studio = scene.get("studio") or {}
         performers = scene.get("performers") or []
+        tags = scene.get("tags") or []
         scene_id = scene.get("id")
         return {
             "slot": self._slot,
@@ -253,8 +287,61 @@ class _SlotTitleSensor(CoordinatorEntity[StashPlaybackCoordinator], SensorEntity
             "cover_url": (scene.get("paths") or {}).get("screenshot"),
             "studio": studio.get("name"),
             "performers": [p.get("name") for p in performers if p.get("name")],
+            "tags": [t.get("name") for t in tags if t.get("name")],
             "last_played_at": scene.get("last_played_at"),
             "resume_time": scene.get("resume_time"),
+        }
+
+
+# kind -> (name, icon, formatter, uid_suffix_fn)
+_SLOT_META = {
+    "studio": ("Studio", "mdi:office-building", slot_studio, uid_slot_studio),
+    "performers": ("Performers", "mdi:account-multiple", slot_performers, uid_slot_performers),
+    "tags": ("Tags", "mdi:tag-multiple", slot_tags, uid_slot_tags),
+    "display_text": ("Display Text", "mdi:card-text", slot_display_text, uid_slot_display_text),
+}
+
+
+class _SlotMetaSensor(CoordinatorEntity[StashPlaybackCoordinator], SensorEntity):
+    """Per-slot metadata text sensor (studio / performers / tags / display text).
+
+    Reuses the sticky slot data from the coordinator; empty slots report the
+    fixed placeholder instead of None/"Unbekannt".
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: StashPlaybackCoordinator,
+        entry: ConfigEntry,
+        slot: int,
+        kind: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._slot = slot
+        name, icon, self._fmt, uid_fn = _SLOT_META[kind]
+        self._attr_unique_id = unique_id(MODULE_ID, entry.entry_id, uid_fn(slot))
+        self._attr_name = f"Slot {slot} {name}"
+        self._attr_icon = icon
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def _scene(self) -> dict[str, Any] | None:
+        slots = (self.coordinator.data or {}).get("slots") or {}
+        return slots.get(self._slot)
+
+    @property
+    def native_value(self) -> str | None:
+        return self._fmt(self._scene, SLOT_EMPTY_TITLE)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        scene = self._scene
+        scene_id = scene.get("id") if scene else None
+        return {
+            "slot": self._slot,
+            "scene_id": str(scene_id) if scene_id is not None else None,
         }
 
 
@@ -313,6 +400,52 @@ class _LastPlayedAtSensor(CoordinatorEntity[StashPlaybackCoordinator], SensorEnt
 # ------------------------------------------------------------------ image
 
 
+async def _blur_image_bytes(data: bytes) -> bytes:
+    try:
+        from PIL import Image, ImageFilter
+    except ImportError:
+        return data
+    try:
+        img = Image.open(io.BytesIO(data))
+        blurred = img.filter(ImageFilter.GaussianBlur(radius=30))
+        if img.mode in ("RGBA", "P"):
+            blurred = blurred.convert("RGB")
+        out = io.BytesIO()
+        blurred.save(out, format="JPEG", quality=85)
+        return out.getvalue()
+    except Exception:  # noqa: BLE001
+        return data
+
+
+async def _fetch_cover_bytes(
+    hass: HomeAssistant, entry: ConfigEntry, screenshot_url: str | None
+) -> bytes | None:
+    """Fetch (and NSFW-process) a scene screenshot. Shared by the global cover
+    and the per-slot covers. Returns None when there is nothing to show or the
+    fetch fails (never raises)."""
+    if not screenshot_url:
+        return None
+    nsfw_mode = entry.options.get(CONF_NSFW_MODE, DEFAULT_NSFW_MODE)
+    if nsfw_mode == NSFW_HIDDEN:
+        return None
+    session = aiohttp_client.async_get_clientsession(hass)
+    api_key = entry.data.get(CONF_API_KEY, "")
+    headers = {"ApiKey": api_key} if api_key else {}
+    try:
+        async with session.get(screenshot_url, headers=headers) as resp:
+            resp.raise_for_status()
+            data = await resp.read()
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning("Stash cover fetch failed for %s: %s", screenshot_url, err)
+        return None
+    if nsfw_mode == NSFW_BLUR:
+        try:
+            return await _blur_image_bytes(data)
+        except Exception:  # noqa: BLE001
+            return data
+    return data
+
+
 class _CoverImage(CoordinatorEntity[StashPlaybackCoordinator], ImageEntity):
     """Cover of the most-recently-active Stash stream."""
 
@@ -359,49 +492,50 @@ class _CoverImage(CoordinatorEntity[StashPlaybackCoordinator], ImageEntity):
     async def async_image(self) -> bytes | None:
         if not self._is_streaming:
             return None
+        screenshot_url = (self._scene.get("paths") or {}).get("screenshot")
+        return await _fetch_cover_bytes(self.hass, self._entry, screenshot_url)
 
+
+class _SlotCoverImage(CoordinatorEntity[StashPlaybackCoordinator], ImageEntity):
+    """Cover/screenshot of the scene stuck to this slot. Empty slot ⇒ no image."""
+
+    def __init__(
+        self,
+        coordinator: StashPlaybackCoordinator,
+        entry: ConfigEntry,
+        hass: HomeAssistant,
+        slot: int,
+    ) -> None:
+        CoordinatorEntity.__init__(self, coordinator)
+        ImageEntity.__init__(self, hass)
+        self._entry = entry
+        self._slot = slot
+        self._last_scene_id: str | None = None
+        self._attr_unique_id = unique_id(MODULE_ID, entry.entry_id, uid_slot_cover(slot))
+        self._attr_name = f"Slot {slot} Cover"
+        self._attr_content_type = "image/jpeg"
+        self._attr_device_info = _device_info(entry)
+        self._attr_image_last_updated: datetime | None = None
+
+    @property
+    def _scene(self) -> dict[str, Any] | None:
+        slots = (self.coordinator.data or {}).get("slots") or {}
+        return slots.get(self._slot)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    def _handle_coordinator_update(self) -> None:
         scene = self._scene
-        screenshot_url = (scene.get("paths") or {}).get("screenshot")
-        if not screenshot_url:
-            return None
+        scene_id = str(scene.get("id")) if scene and scene.get("id") is not None else None
+        if scene_id != self._last_scene_id:
+            self._last_scene_id = scene_id
+            self._attr_image_last_updated = dt_util.utcnow() if scene_id else None
+        super()._handle_coordinator_update()
 
-        nsfw_mode = self._entry.options.get(CONF_NSFW_MODE, DEFAULT_NSFW_MODE)
-        if nsfw_mode == NSFW_HIDDEN:
-            return None
-
-        session = aiohttp_client.async_get_clientsession(self.hass)
-        api_key = self._entry.data.get(CONF_API_KEY, "")
-        headers = {"ApiKey": api_key} if api_key else {}
-        try:
-            async with session.get(screenshot_url, headers=headers) as resp:
-                resp.raise_for_status()
-                data = await resp.read()
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Stash cover fetch failed for %s: %s", screenshot_url, err)
-            return None
-
-        if nsfw_mode == NSFW_BLUR:
-            try:
-                return await self._blur_image(data)
-            except Exception:  # noqa: BLE001
-                return data
-        return data
-
-    async def _blur_image(self, data: bytes) -> bytes:
-        try:
-            from PIL import Image, ImageFilter
-        except ImportError:
-            return data
-        try:
-            img = Image.open(io.BytesIO(data))
-            blurred = img.filter(ImageFilter.GaussianBlur(radius=30))
-            if img.mode in ("RGBA", "P"):
-                blurred = blurred.convert("RGB")
-            out = io.BytesIO()
-            blurred.save(out, format="JPEG", quality=85)
-            return out.getvalue()
-        except Exception:  # noqa: BLE001
-            return data
+    async def async_image(self) -> bytes | None:
+        return await _fetch_cover_bytes(self.hass, self._entry, slot_cover_url(self._scene))
 
 
 # --------------------------------------------------------------- media_player
@@ -586,3 +720,118 @@ class _MediaPlayer(CoordinatorEntity[StashPlaybackCoordinator], MediaPlayerEntit
         elif not self._is_streaming:
             self._position_updated_at = None
         super()._handle_coordinator_update()
+
+
+class _SlotMediaPlayer(CoordinatorEntity[StashPlaybackCoordinator], MediaPlayerEntity):
+    """Display-only per-slot media player (no real control; supported_features=0).
+
+    A dashboard tile for the scene stuck to this slot. Empty slot ⇒ idle with the
+    fixed placeholder title and no cover. Does NOT implement any play/pause/seek/
+    volume services — it never pretends to control the stream.
+    """
+
+    _attr_media_content_type = MediaType.VIDEO
+    _attr_supported_features = MediaPlayerEntityFeature(0)
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: StashPlaybackCoordinator,
+        entry: ConfigEntry,
+        client,
+        slot: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._client = client
+        self._slot = slot
+        self._cover_entity_id: str | None = None
+        self._attr_unique_id = unique_id(
+            MODULE_ID, entry.entry_id, uid_slot_media_player(slot)
+        )
+        self._attr_name = f"Slot {slot}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def _scene(self) -> dict[str, Any] | None:
+        slots = (self.coordinator.data or {}).get("slots") or {}
+        return slots.get(self._slot)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def state(self) -> str:
+        return STATE_PLAYING if self._scene else STATE_IDLE
+
+    @property
+    def media_title(self) -> str:
+        # Occupied ⇒ real title; empty ⇒ the fixed placeholder.
+        return slot_title(self._scene, SLOT_EMPTY_TITLE)
+
+    @property
+    def media_artist(self) -> str | None:
+        return slot_performers(self._scene, SLOT_EMPTY_TITLE) if self._scene else None
+
+    @property
+    def media_album_name(self) -> str | None:
+        return slot_studio(self._scene, SLOT_EMPTY_TITLE) if self._scene else None
+
+    @property
+    def media_content_id(self) -> str | None:
+        scene = self._scene
+        sid = scene.get("id") if scene else None
+        return str(sid) if sid is not None else None
+
+    @property
+    def media_image_url(self) -> str | None:
+        return slot_cover_url(self._scene)
+
+    def _resolve_cover_entity(self) -> str | None:
+        if self._cover_entity_id:
+            return self._cover_entity_id
+        if self.hass is None:
+            return None
+        cover_uid = unique_id(MODULE_ID, self._entry.entry_id, uid_slot_cover(self._slot))
+        registry = er.async_get(self.hass)
+        self._cover_entity_id = registry.async_get_entity_id("image", DOMAIN, cover_uid)
+        return self._cover_entity_id
+
+    @property
+    def entity_picture(self) -> str | None:
+        if not self._scene:
+            return None
+        cover = self._resolve_cover_entity()
+        if cover and self.hass is not None:
+            cover_state = self.hass.states.get(cover)
+            if cover_state is not None:
+                pic = cover_state.attributes.get("entity_picture")
+                if pic:
+                    return pic
+        return self.media_image_url
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        scene = self._scene
+        if not scene:
+            return {"slot": self._slot, "scene_id": None}
+        studio = scene.get("studio") or {}
+        performers = scene.get("performers") or []
+        tags = scene.get("tags") or []
+        scene_id = scene.get("id")
+        return {
+            "slot": self._slot,
+            "scene_id": str(scene_id) if scene_id is not None else None,
+            "title": scene.get("title"),
+            "studio": studio.get("name"),
+            "performers": [p.get("name") for p in performers if p.get("name")],
+            "tags": [t.get("name") for t in tags if t.get("name")],
+            "cover_url": (scene.get("paths") or {}).get("screenshot"),
+            "last_played_at": scene.get("last_played_at"),
+            "resume_time": scene.get("resume_time"),
+        }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._resolve_cover_entity()

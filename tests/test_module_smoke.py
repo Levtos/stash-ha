@@ -331,6 +331,30 @@ def test_entities_wire_fixed_slot_title_sensors():
     assert sh_const.uid_slot_title(2) == "slot_2_title"
 
 
+def test_entities_wire_slot_dashboard_package():
+    """v0.7.0: per-slot metadata sensors, cover images and media players."""
+    src = (MODULE_DIR / "entities.py").read_text(encoding="utf-8")
+    for cls in ("_SlotMetaSensor", "_SlotCoverImage", "_SlotMediaPlayer"):
+        assert cls in src, cls
+    for helper in (
+        "uid_slot_studio",
+        "uid_slot_performers",
+        "uid_slot_tags",
+        "uid_slot_display_text",
+        "uid_slot_cover",
+        "uid_slot_media_player",
+    ):
+        assert helper in src, helper
+    # stable placeholder + suffix contracts
+    assert sh_const.SLOT_EMPTY_TITLE == "Kein Stream aktiv"
+    assert sh_const.uid_slot_studio(1) == "slot_1_studio"
+    assert sh_const.uid_slot_performers(2) == "slot_2_performers"
+    assert sh_const.uid_slot_tags(3) == "slot_3_tags"
+    assert sh_const.uid_slot_display_text(4) == "slot_4_display_text"
+    assert sh_const.uid_slot_cover(2) == "slot_2_cover"
+    assert sh_const.uid_slot_media_player(3) == "slot_3_player"
+
+
 # =========================================================================
 # 2) Webhook URL contract.
 # =========================================================================

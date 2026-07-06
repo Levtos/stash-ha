@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 - 2026-07-06
+
+- Add a full per-slot dashboard package on top of the v0.6.0 slot title sensors
+  (reusing the existing sticky `scene_id` → slot mapping; the slot logic is
+  unchanged).
+- Add per-slot dashboard media players (`media_player.stash_slot_1` …
+  `_slot_4`): display-only, `supported_features=0`, no play/pause/seek/volume —
+  they never pretend to control the stream. Active slot → `state=playing`,
+  title/performers/studio/cover; empty slot → `state=idle`, title
+  "Kein Stream aktiv", no cover.
+- Add per-slot cover image entities (`image.stash_slot_1_cover` … `_slot_4`);
+  empty slots show no image. Cover fetch/NSFW handling is shared with the global
+  cover.
+- Add per-slot studio, performers, tags and display-text sensors
+  (`sensor.stash_slot_N_studio` / `_performers` / `_tags` / `_display_text`).
+  Display text is a compact "Title — Studio" line.
+- Slot title sensors now show the fixed placeholder "Kein Stream aktiv" for empty
+  slots instead of None/"Unbekannt" (meant for the Title Classifier ignore
+  list). Title sensors also expose `tags` now.
+- The global `media_player.stash`, the global cover image, Currently Playing and
+  Active Streams are unchanged. No media player control, no collage yet.
+
 ## 0.6.0 - 2026-07-06
 
 - Add fixed Stash slot title sensors (`sensor.stash_slot_1_title` …

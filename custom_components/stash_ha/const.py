@@ -36,6 +36,11 @@ ACTIVE_SCENE_WINDOW = 10
 # the Title Classifier can watch each active stream as a separate source.
 SLOT_COUNT = 4
 
+# Placeholder for an empty slot (title / metadata / media player). This exact
+# string is meant to be added to the Title Classifier's ignore list, so it must
+# stay stable.
+SLOT_EMPTY_TITLE = "Kein Stream aktiv"
+
 NSFW_BLUR = "blur"
 NSFW_HIDDEN = "hidden"
 NSFW_FULL = "full"
@@ -68,12 +73,38 @@ UID_LAST_PLAYED_TITLE = "last_played_title"
 UID_LAST_PLAYED_AT = "last_played_at"
 
 
-def uid_slot_title(slot: int) -> str:
-    """Unique-id suffix for the slot-N title sensor (stable across polls)."""
-    return f"slot_{slot}_title"
 # Image + media_player
 UID_COVER = "cover"
 UID_PLAYER = "player"
+
+
+# --- Per-slot unique-id suffixes (stable across polls) ---
+def uid_slot_title(slot: int) -> str:
+    return f"slot_{slot}_title"
+
+
+def uid_slot_studio(slot: int) -> str:
+    return f"slot_{slot}_studio"
+
+
+def uid_slot_performers(slot: int) -> str:
+    return f"slot_{slot}_performers"
+
+
+def uid_slot_tags(slot: int) -> str:
+    return f"slot_{slot}_tags"
+
+
+def uid_slot_display_text(slot: int) -> str:
+    return f"slot_{slot}_display_text"
+
+
+def uid_slot_cover(slot: int) -> str:
+    return f"slot_{slot}_cover"
+
+
+def uid_slot_media_player(slot: int) -> str:
+    return f"slot_{slot}_player"
 
 # --- GraphQL queries -----------------------------------------------------------
 
