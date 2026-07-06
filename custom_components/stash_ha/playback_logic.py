@@ -195,6 +195,70 @@ def slots_view(
     return view
 
 
+# ------------------------------------------------------- per-slot display text
+# Pure formatting for the slot dashboard entities. ``scene`` is the slot's scene
+# dict or None (empty slot). ``empty`` is the placeholder shown for empty slots
+# (SLOT_EMPTY_TITLE). Kept here so it is unit-tested without Home Assistant.
+
+
+def _performer_names(scene: dict[str, Any]) -> list[str]:
+    return [p.get("name") for p in (scene.get("performers") or []) if p.get("name")]
+
+
+def _tag_names(scene: dict[str, Any]) -> list[str]:
+    return [t.get("name") for t in (scene.get("tags") or []) if t.get("name")]
+
+
+def slot_title(scene: dict[str, Any] | None, empty: str) -> str:
+    """Slot title state — the scene title, or the placeholder for an empty slot
+    (also when an occupied scene happens to carry no title)."""
+    if scene is None:
+        return empty
+    return scene.get("title") or empty
+
+
+def slot_studio(scene: dict[str, Any] | None, empty: str) -> str | None:
+    """Studio name, placeholder for an empty slot, or None when unknown."""
+    if scene is None:
+        return empty
+    return (scene.get("studio") or {}).get("name") or None
+
+
+def slot_performers(scene: dict[str, Any] | None, empty: str) -> str | None:
+    """Readable performer list ("A, B"), placeholder when empty, None when none."""
+    if scene is None:
+        return empty
+    return ", ".join(_performer_names(scene)) or None
+
+
+def slot_tags(scene: dict[str, Any] | None, empty: str) -> str | None:
+    """Readable tag list ("A, B"), placeholder when empty, None when none."""
+    if scene is None:
+        return empty
+    return ", ".join(_tag_names(scene)) or None
+
+
+def slot_display_text(scene: dict[str, Any] | None, empty: str) -> str:
+    """Compact dashboard line: "Title — Studio", or just the title when the
+    studio is unknown; placeholder for an empty (or title-less) slot."""
+    if scene is None:
+        return empty
+    title = scene.get("title")
+    studio = (scene.get("studio") or {}).get("name")
+    if title and studio:
+        return f"{title} — {studio}"
+    if title:
+        return title
+    return empty
+
+
+def slot_cover_url(scene: dict[str, Any] | None) -> str | None:
+    """The slot scene's screenshot/cover URL, or None (empty slot / no cover)."""
+    if not scene:
+        return None
+    return (scene.get("paths") or {}).get("screenshot")
+
+
 def current_playing_title(scenes: list[dict[str, Any]] | None) -> str | None:
     """State for the Currently Playing sensor: the most-recently-active scene's
     title. ``scenes`` are ordered last_played_at DESC, so ``scenes[0]`` is the

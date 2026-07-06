@@ -271,3 +271,59 @@ def test_slots_view_stale_mapping_entry_resolves_to_none():
     view = P.slots_view([_scene("a")], {"a": 1, "gone": 2}, 4)
     assert view[1]["title"] == "Ta"
     assert view[2] is None
+
+
+# --------------------------------------------------------- per-slot display text
+
+EMPTY = C.SLOT_EMPTY_TITLE  # "Kein Stream aktiv"
+
+
+def _full_scene():
+    return {
+        "id": "1",
+        "title": "Overcharged Breeding",
+        "studio": {"name": "Next Door Raw"},
+        "performers": [{"name": "A"}, {"name": "B"}, {"name": ""}],
+        "tags": [{"name": "T1"}, {"name": "T2"}],
+        "paths": {"screenshot": "http://x/1.jpg"},
+    }
+
+
+def test_slot_title_active_and_empty():
+    assert P.slot_title(_full_scene(), EMPTY) == "Overcharged Breeding"
+    assert P.slot_title(None, EMPTY) == EMPTY
+    # occupied but title-less falls back to the placeholder (never None)
+    assert P.slot_title({"id": "1", "title": None}, EMPTY) == EMPTY
+
+
+def test_slot_studio_active_empty_unknown():
+    assert P.slot_studio(_full_scene(), EMPTY) == "Next Door Raw"
+    assert P.slot_studio(None, EMPTY) == EMPTY
+    assert P.slot_studio({"id": "1"}, EMPTY) is None  # active but unknown
+
+
+def test_slot_performers_active_empty_none():
+    assert P.slot_performers(_full_scene(), EMPTY) == "A, B"
+    assert P.slot_performers(None, EMPTY) == EMPTY
+    assert P.slot_performers({"id": "1"}, EMPTY) is None
+
+
+def test_slot_tags_active_empty_none():
+    assert P.slot_tags(_full_scene(), EMPTY) == "T1, T2"
+    assert P.slot_tags(None, EMPTY) == EMPTY
+    assert P.slot_tags({"id": "1"}, EMPTY) is None
+
+
+def test_slot_display_text_variants():
+    assert P.slot_display_text(_full_scene(), EMPTY) == "Overcharged Breeding — Next Door Raw"
+    # title only (no studio)
+    assert P.slot_display_text({"id": "1", "title": "Solo"}, EMPTY) == "Solo"
+    # empty / title-less -> placeholder
+    assert P.slot_display_text(None, EMPTY) == EMPTY
+    assert P.slot_display_text({"id": "1", "title": None}, EMPTY) == EMPTY
+
+
+def test_slot_cover_url_active_empty_missing():
+    assert P.slot_cover_url(_full_scene()) == "http://x/1.jpg"
+    assert P.slot_cover_url(None) is None
+    assert P.slot_cover_url({"id": "1"}) is None  # no paths/screenshot
